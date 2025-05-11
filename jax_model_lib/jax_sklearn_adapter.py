@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
-from jax_model_lib import jax_vlMAP, adaptive_prior
+from jax_model_lib import jax_vlMAP, adaptive_prior, group_prior, hier_prior
 
 class JaxSparseRegressor(BaseEstimator, RegressorMixin):
     def __init__(
@@ -11,7 +11,13 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         mb_size=50,
         invlam=False,
         logprox=False,
-        track=False
+        track=False,
+        lam_prior='adaptive',
+        lam_prior_vars=None,
+        lik='normal',
+        custom_prox=None,
+        custom_nll_grad=None,
+        custom_prior=None
     ):
         self.tau0 = tau0
         self.max_iters = max_iters
@@ -20,24 +26,49 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         self.invlam = invlam
         self.logprox = logprox
         self.track = track
+        self.lam_prior = lam_prior
+        self.lam_prior_vars = lam_prior_vars
+        self.lik = lik
+        self.custom_prox = custom_prox
+        self.custom_nll_grad = custom_nll_grad
+        self.custom_prior = custom_prior
 
     def fit(self, X, y):
         X = np.asarray(X)
         y = np.asarray(y)
         P = X.shape[1]
-        lam_prior_vars = {'log_gamma': np.zeros(P)}
+
+        prior_map = {
+            'adaptive': adaptive_prior,
+            'group': group_prior,
+            'hier': hier_prior
+        }
+        prior_func = prior_map[self.lam_prior]
+
+        if self.lam_prior_vars is None and self.lam_prior == 'group':
+            G = int(np.ceil(np.sqrt(P)))
+            lam_prior_vars = {
+                'log_gamma': np.zeros(G),
+                'groups': np.repeat(np.arange(G), P // G + 1)[:P]
+            }
+            lam_prior_vars = {'log_gamma': np.zeros(P)}
+        else:
+            lam_prior_vars = self.lam_prior_vars
 
         self.model_ = jax_vlMAP(
             X=X,
             y=y,
-            lam_prior=adaptive_prior,
+            lam_prior=prior_func,
             lam_prior_vars=lam_prior_vars,
-            lik='normal',
+            lik=self.lik,
             tau0=self.tau0,
             mb_size=self.mb_size,
             invlam=self.invlam,
             logprox=self.logprox,
-            track=self.track
+            track=self.track,
+            custom_prox=self.custom_prox,
+            custom_nll_grad=self.custom_nll_grad,
+            custom_prior=self.custom_prior
         )
         self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=False)
         return self

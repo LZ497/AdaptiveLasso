@@ -68,7 +68,10 @@ def get_sd(grad, ss):
 class jax_vlMAP:
     auto_N_sg = 5000
 
-    def __init__(self, X, y, lam_prior, lam_prior_vars, big_N = None, tau0=1, lik='normal', mb_size = None, no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500):
+    def __init__(self, X, y, lam_prior, lam_prior_vars, big_N = None, tau0=1, lik='normal', mb_size = None, no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
+        self.custom_prox = custom_prox
+        self.custom_prior = custom_prior
+        self.custom_nll_grad = custom_nll_grad
         self.lik = lik
         self.tau0 = tau0
         self.big_N = big_N
@@ -416,9 +419,15 @@ class jax_vlMAP:
                 Xs_use = expand_X_int(Xs, self.ind1_exp, self.ind2_exp)  
             else:
                 Xs_use = Xs
-            cost_nll, grad_nll = self.eval_nll_grad_subset(self.vv, Xs_use, ys)
-            _, grad_nll0 = self.eval_nll_grad_subset(self.vv0, Xs_use, ys)
-            cost_prior, grad_prior = self.eval_prior_grad(self.vv, self.tau0)
+            if self.custom_nll_grad:
+                cost_nll, grad_nll = self.custom_nll_grad(self.vv, Xs_use, ys)
+            else:
+                cost_nll, grad_nll = self.eval_nll_grad_subset(self.vv, Xs_use, ys)
+                _, grad_nll0 = self.eval_nll_grad_subset(self.vv0, Xs_use, ys)
+            if self.custom_prior:
+                cost_prior, grad_prior = self.custom_prior(self.vv, self.tau0)
+            else:
+                cost_prior, grad_prior = self.eval_prior_grad(self.vv, self.tau0)
 
             self.costs[i] = self.N/self.mb_size*cost_nll + sum(cost_prior)
             if not np.isfinite(self.costs[i]):

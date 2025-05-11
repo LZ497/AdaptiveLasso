@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #  jax_hier_lib.py Author "Nathan Wycoff <nathanbrwycoff@gmail.com>" Date 04.14.2024
-
+import jax.numpy as jnp
+from tensorflow_probability.substrates import jax as tfp
+tfpd = tfp.distributions
 
 def adaptive_prior(x, pv, mod):
-    import jax.numpy as jnp
-    from tensorflow_probability.substrates import jax as tfp
-    tfpd = tfp.distributions
-
     lam_dist = tfpd.Cauchy(loc=0., scale=1.)
     lam_dens = -jnp.sum(lam_dist.log_prob(x) - jnp.log((1 - lam_dist.cdf(0))))
     return lam_dens
 
 def group_prior(x, pv, mod):
     gamma = jnp.exp(pv['log_gamma'])
+
+    if 'groups' in pv:
+        groups = pv['groups']
+    else:
+        G = gamma.shape[0]
+        P = x.shape[0]
+        groups = jnp.tile(jnp.arange(G), P // G + 1)[:P]
+
     gamma_dist = tfpd.Cauchy(loc=0., scale=1.)
-    gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma)-jnp.log((1-gamma_dist.cdf(0))))
+    gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma) - jnp.log(1 - gamma_dist.cdf(0)))
 
     gamma_big = gamma[groups]
-    lam_sd = 1./jnp.sqrt(mod.N)
+    lam_sd = 1. / jnp.sqrt(mod.N)
     lam_dist = tfpd.Normal(loc=gamma_big, scale=lam_sd)
-    lam_dens = -jnp.sum(lam_dist.log_prob(x)-jnp.log(1-lam_dist.cdf(0)))
+    lam_dens = -jnp.sum(lam_dist.log_prob(x) - jnp.log(1 - lam_dist.cdf(0)))
+
     return lam_dens + gamma_dens
 
 def hier_prior(x, pv, mod):
