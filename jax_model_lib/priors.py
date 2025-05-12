@@ -16,12 +16,13 @@ def group_prior(x, pv, mod):
     gamma = jnp.exp(pv['log_gamma'])
 
     if 'groups' in pv:
-        groups = pv['groups']
+        groups_raw  = pv['groups']
     else:
         G = gamma.shape[0]
         P = x.shape[0]
-        groups = jnp.tile(jnp.arange(G), P // G + 1)[:P]
-
+        groups_raw  = jnp.tile(jnp.arange(G), P // G + 1)[:P]
+    groups = jax.lax.stop_gradient(jnp.array(groups_raw).astype(jnp.int32))
+    
     gamma_dist = tfpd.Cauchy(loc=0., scale=1.)
     gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma) - jnp.log(1 - gamma_dist.cdf(0)))
 

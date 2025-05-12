@@ -52,7 +52,7 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
                 G = int(np.ceil(np.sqrt(P)))
                 lam_prior_vars = {
                     'log_gamma': np.zeros(G),
-                    'groups': np.repeat(np.arange(G), P // G + 1)[:P].astype(int)
+                    'groups': np.repeat(np.arange(G), P // G + 1)[:P].astype(np.float32) 
                 }
             else:
                 raise ValueError(f"Missing lam_prior_vars for lam_prior={self.lam_prior}")
