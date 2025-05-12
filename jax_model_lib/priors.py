@@ -14,11 +14,11 @@ def group_prior(x, pv, mod):
     gamma = jnp.exp(pv['log_gamma'])
 
     if 'groups' in pv:
-        groups = pv['groups']
+        groups = pv['groups'].astype(int)  # Ensure groups are integers
     else:
         G = gamma.shape[0]
         P = x.shape[0]
-        groups = jnp.tile(jnp.arange(G), P // G + 1)[:P]
+        groups = jnp.tile(jnp.arange(G), P // G + 1)[:P].astype(int)  # Ensure groups are integers
 
     gamma_dist = tfpd.Cauchy(loc=0., scale=1.)
     gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma) - jnp.log(1 - gamma_dist.cdf(0)))

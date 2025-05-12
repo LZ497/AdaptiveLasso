@@ -77,7 +77,7 @@ class jax_vlMAP:
         self.big_N = big_N
         assert tau0 > 0
         self.no_adapt = no_adapt
-        self.lam_prior_vars = lam_prior_vars 
+        self.lam_prior_vars = lam_prior_vars if lam_prior_vars is not None else {} 
         self.lam_prior = lam_prior
         self.invlam = invlam
         self.logprox = logprox
@@ -223,7 +223,9 @@ class jax_vlMAP:
 
         #PP = 2*self.P if self.lik=='zinb' else self.P
         beta = jnp.zeros(self.Pb)
-        lam = 1.1*jnp.ones_like(beta)
+        lam = 1.1 * jnp.ones_like(beta)
+        if len(lam.shape) == 0:  # Ensure lam is at least 1-dimensional
+            lam = lam.reshape([1])
         #lam = jnp.ones_like(beta) / (self.N+1)
 
         if self.dont_pen is not None:
@@ -237,8 +239,19 @@ class jax_vlMAP:
         if self.lik=='zinb':
             self.vv['beta00']=beta00
         #self.vv = self.vv | self.lam_prior_vars
-        for v in self.lam_prior_vars:
-            self.lam_prior_vars[v] = jnp.copy(self.lam_prior_vars_init[v])
+        if self.lam_prior_vars is None:
+            self.lam_prior_vars = {}  # Ensure it's a dictionary
+        if self.lam_prior_vars is None and self.lam_prior == 'adaptive':
+            lam_prior_vars = {}
+        else:
+            lam_prior_vars = self.lam_prior_vars if self.lam_prior_vars is not None else {}
+
+        self.lam_prior_vars_init = {}
+        for v in lam_prior_vars:
+            self.lam_prior_vars_init[v] = jnp.copy(lam_prior_vars[v])
+
+        for v in lam_prior_vars:
+            self.lam_prior_vars[v] = jnp.copy(lam_prior_vars[v])
         self.vv = {**self.vv, **self.lam_prior_vars}
 
         for v in self.vv:
@@ -421,11 +434,21 @@ class jax_vlMAP:
                 Xs_use = Xs
             if self.custom_nll_grad:
                 cost_nll, grad_nll = self.custom_nll_grad(self.vv, Xs_use, ys)
+                # Also compute grad_nll0 using the custom function
+                _, grad_nll0 = self.custom_nll_grad(self.vv0, Xs_use, ys)
             else:
                 cost_nll, grad_nll = self.eval_nll_grad_subset(self.vv, Xs_use, ys)
                 _, grad_nll0 = self.eval_nll_grad_subset(self.vv0, Xs_use, ys)
             if self.custom_prior:
-                cost_prior, grad_prior = self.custom_prior(self.vv, self.tau0)
+                cost_prior, grad_from_prior = self.custom_prior(self.vv['lam'], self.vv, self)
+                grad_prior = {}
+                for v in self.vv:
+                    if v in grad_from_prior:
+                        grad_prior[v] = grad_from_prior[v]
+                        if len(grad_prior[v].shape) == 0:  # Ensure gradients are at least 1-dimensional
+                            grad_prior[v] = grad_prior[v].reshape([1])
+                    else:
+                        grad_prior[v] = jnp.zeros_like(self.vv[v])
             else:
                 cost_prior, grad_prior = self.eval_prior_grad(self.vv, self.tau0)
 
@@ -486,6 +509,8 @@ class jax_vlMAP:
             dist_z = tfpd.Deterministic(loc=jnp.zeros_like(preds_y))
             pnz = tfpd.Categorical(logits=jnp.stack([preds_z,-preds_z]).T)
             dist_pred = tfpd.Mixture(pnz, components=[dist_z, dist_nz])
+        elif self.lik == 'none':
+            dist_pred = tfpd.Deterministic(loc=preds)
         else:
             raise Exception("Unrecognized Likelihood.")
         return dist_pred
