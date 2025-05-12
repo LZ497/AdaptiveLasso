@@ -3,7 +3,9 @@
 #  jax_hier_lib.py Author "Nathan Wycoff <nathanbrwycoff@gmail.com>" Date 04.14.2024
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
+import jax
 tfpd = tfp.distributions
+import numpy as np 
 
 def adaptive_prior(x, pv, mod):
     lam_dist = tfpd.Cauchy(loc=0., scale=1.)

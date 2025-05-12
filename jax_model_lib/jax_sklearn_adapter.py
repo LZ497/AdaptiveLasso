@@ -45,13 +45,17 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         }
         prior_func = prior_map[self.lam_prior]
 
-        if self.lam_prior_vars is None and self.lam_prior == 'group':
-            G = int(np.ceil(np.sqrt(P)))
-            lam_prior_vars = {
-                'log_gamma': np.zeros(G),
-                'groups': np.repeat(np.arange(G), P // G + 1)[:P]
-            }
-            lam_prior_vars = {'log_gamma': np.zeros(P)}
+        if self.lam_prior_vars is None:
+            if self.lam_prior == 'adaptive':
+                lam_prior_vars = {'dummy': np.zeros(1)}  # will be ignored
+            elif self.lam_prior == 'group':
+                G = int(np.ceil(np.sqrt(P)))
+                lam_prior_vars = {
+                    'log_gamma': np.zeros(G),
+                    'groups': np.repeat(np.arange(G), P // G + 1)[:P].astype(int)
+                }
+            else:
+                raise ValueError(f"Missing lam_prior_vars for lam_prior={self.lam_prior}")
         else:
             lam_prior_vars = self.lam_prior_vars
 
