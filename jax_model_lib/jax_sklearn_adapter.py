@@ -45,17 +45,35 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         }
         prior_func = prior_map[self.lam_prior]
 
+        # if self.lam_prior_vars is None:
+        #     if self.lam_prior == 'group':
+        #         G = int(np.ceil(np.sqrt(P)))
+        #         lam_prior_vars = {
+        #             'log_gamma': np.zeros(G),
+        #             'groups': np.repeat(np.arange(G), P // G + 1)[:P]
+        #         }
+        #     else:
+        #         lam_prior_vars = {}
+        # else:
+        #     lam_prior_vars = self.lam_prior_vars
         if self.lam_prior_vars is None:
             if self.lam_prior == 'group':
-                G = int(np.ceil(np.sqrt(P)))
+                G = int(np.ceil(np.sqrt(P)))  # P must be known here
                 lam_prior_vars = {
                     'log_gamma': np.zeros(G),
                     'groups': np.repeat(np.arange(G), P // G + 1)[:P]
+                }
+            elif self.lam_prior == 'hier':
+                G = P  
+                lam_prior_vars = {
+                    'log_gamma': np.zeros(G)
                 }
             else:
                 lam_prior_vars = {}
         else:
             lam_prior_vars = self.lam_prior_vars
+
+
 
         self.model_ = jax_vlMAP(
             X=X,

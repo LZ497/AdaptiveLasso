@@ -9,6 +9,8 @@ import jax.numpy as jnp
 from tqdm import tqdm
 from jax import jit
 import matplotlib.pyplot as plt
+from functools import partial
+from jax_model_lib.quartic_roots import quartic_roots
 from tensorflow_probability.substrates import jax as tfp
 tfpd = tfp.distributions
 
@@ -39,24 +41,57 @@ def get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, mb_size, N):
         sd[v] = -(N/mb_size*(grad_nll[v] - grad_nll0[v]) + g0[v]  + grad_prior[v])
     return sd
 
-@jit
-def get_vv_at(vv, sd, ss, lr, tau0):
-    # Gradient Step
-    new_vv = {}
-    for v in vv:
-        new_vv[v] = vv[v] + lr*ss[v]*sd[v]
+def get_vv_inv(vv, sd, ss, lr, tau0):
+    # Gradient step outside of jit
+    new_vv = {v: vv[v] + lr * ss[v] * sd[v] for v in vv}
 
-    # Proximal step
-    if GLOB_prox=='inv':
-        new_beta, new_lam = jax_apply_prox_inv(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
-    elif GLOB_prox=='log':
+    x0 = np.array(jax.device_get(new_vv['beta']))
+    lam0 = np.array(jax.device_get(new_vv['lam']))
+    sx = np.array(jax.device_get(tau0 * lr * ss['beta']))
+    sl = np.array(jax.device_get(tau0 * lr * ss['lam']))
+
+    new_beta, new_lam = jax_apply_prox_inv(x0, lam0, sx, sl)
+
+    new_vv['beta'] = jnp.where(ss['beta'] > 0, new_beta, new_vv['beta'])
+    new_vv['lam']  = jnp.where(ss['lam']  > 0, new_lam,  new_vv['lam'])
+    return new_vv
+
+@jit
+def get_vv_stdlog(vv, sd, ss, lr, tau0):
+    new_vv = {v: vv[v] + lr * ss[v] * sd[v] for v in vv}
+
+    if GLOB_prox == 'log':
         new_beta, new_lam = jax_apply_prox_log(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'], 1/tau0)
-    elif GLOB_prox=='std':
+    elif GLOB_prox == 'std':
         new_beta, new_lam = jax_apply_prox(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
-    new_vv['beta'] = jnp.where(ss['beta']>0, new_beta,  new_vv['beta'])
-    new_vv['lam'] = jnp.where(ss['lam']>0, new_lam, new_vv['lam'])
+    new_vv['beta'] = jnp.where(ss['beta'] > 0, new_beta, new_vv['beta'])
+    new_vv['lam']  = jnp.where(ss['lam'] > 0, new_lam,  new_vv['lam'])
 
     return new_vv
+
+# @jit
+# def get_vv_at(vv, sd, ss, lr, tau0):
+#     # Gradient Step
+#     new_vv = {}
+#     for v in vv:
+#         new_vv[v] = vv[v] + lr*ss[v]*sd[v]
+
+#     # Proximal step
+#     if GLOB_prox=='inv':
+#         new_beta, new_lam = jax_apply_prox_inv(
+#         np.array(jax.device_get(new_vv['beta'])),
+#         np.array(jax.device_get(new_vv['lam'])),
+#         np.array(jax.device_get(tau0 * lr * ss['beta'])),
+#         np.array(jax.device_get(tau0 * lr * ss['lam'])))
+#         #new_beta, new_lam = jax_apply_prox_inv(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
+#     elif GLOB_prox=='log':
+#         new_beta, new_lam = jax_apply_prox_log(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'], 1/tau0)
+#     elif GLOB_prox=='std':
+#         new_beta, new_lam = jax_apply_prox(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
+#     new_vv['beta'] = jnp.where(ss['beta']>0, new_beta,  new_vv['beta'])
+#     new_vv['lam'] = jnp.where(ss['lam']>0, new_lam, new_vv['lam'])
+
+#     return new_vv
 
 @jit
 def get_sd(grad, ss):
@@ -162,8 +197,8 @@ class jax_vlMAP:
         self.tau0 = tau0
 
     def set_Xy(self, X, y):
+        X = np.array(X)
         N,self.Pu = X.shape
-
         ind_es = np.random.choice(N,self.N_es,replace=False)
         ind_train = np.setdiff1d(np.arange(N), ind_es)
         X_es = X[ind_es,:]
@@ -193,6 +228,15 @@ class jax_vlMAP:
         self.y = np.array(y_train)
         self.X_es = np.array(X_es)
         self.y_es = np.array(y_es)
+        
+        if self.lam_prior == 'hier' and not self.lam_prior_vars:
+            self.lam_prior_vars = {
+            'log_gamma': np.zeros(self.Pu)}
+        
+    # Define Pi and Pq for hierarchical prior logic
+        num_interactions = int(scipy.special.binom(self.Pu, 2)) if self.quad or self.intr else 0
+        self.Pi = num_interactions
+        self.Pq = self.Pu if self.quad else 0
 
     def reset_vars(self):
         # NOTE: This is indeed X.shape[0], NOT N. (Oh, is it still tho?)
@@ -475,7 +519,11 @@ class jax_vlMAP:
                 pf_vars = ['beta','lam']+list(self.lam_prior_vars.keys())
                 for v in pf_vars:
                     ss[v] *= 0
-            next_vv = get_vv_at(self.vv, sd, ss, lr_use, self.tau0)
+            if GLOB_prox == 'inv':
+                next_vv = get_vv_inv(self.vv, sd, ss, lr_use, self.tau0)
+            else:
+                next_vv = get_vv_stdlog(self.vv, sd, ss, lr_use, self.tau0)
+            #next_vv = get_vv_at(self.vv, sd, ss, lr_use, self.tau0)
             self.vv = next_vv
             self.last_it = i
 
@@ -647,7 +695,8 @@ def jax_prox_inv_cost(x,lam,x0,lam0,sx,sl):
 
 ## Can't jit because of the rootfinding.
 def jax_apply_prox_inv(x0, lam0, sx, sl):
-    p = jnp.stack([1/(sx*sl), -lam0/(sx*sl), jnp.zeros(P), -jnp.abs(x0)/sx, jnp.ones(P)]).T
+    p = np.stack([1/(sx*sl), -lam0/(sx*sl), jnp.zeros_like(x0), -jnp.abs(x0)/sx, jnp.ones_like(x0)]).T
+    #p = jnp.stack([1/(sx*sl), -lam0/(sx*sl), jnp.zeros(P), -jnp.abs(x0)/sx, jnp.ones(P)]).T
 
     roots = quartic_roots(p)
 
