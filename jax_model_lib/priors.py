@@ -6,6 +6,29 @@ from tensorflow_probability.substrates import jax as tfp
 import jax
 tfpd = tfp.distributions
 import numpy as np 
+import scipy
+
+def make_gamma_mat(P):
+    tops = []
+    bots = []
+    for i in range(P):
+        if i > 0:
+            incs = np.concatenate([[0],np.cumsum(P-1-np.arange(1,i))])
+            tops.append(i+incs)
+        else:
+            tops.append([])
+    for i in range(P-1):
+        if i >0:
+            startat = tops[i+1][i]
+        else:
+            startat = 1
+        bots.append(np.arange(startat,startat+P-1-i))
+    bots.append([])
+    gammat = np.zeros([P-1,P])
+    for i in range(P):
+        gammat[:,i] = np.concatenate([tops[i], bots[i]])
+    gammat -= 1
+    return gammat
 
 def adaptive_prior(x, pv, mod):
     lam_dist = tfpd.Cauchy(loc=0., scale=1.)
@@ -33,6 +56,9 @@ def group_prior(x, pv, mod):
     return lam_dens + gamma_dens
 
 def hier_prior(x, pv, mod):
+    Pu = mod.Pu
+    Pi = mod.Pi
+    Pq = mod.Pq
     gamma = jnp.exp(pv['log_gamma'])
     gamma_dist = tfpd.Cauchy(loc=0., scale=1.)
     gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma)-jnp.log((1-gamma_dist.cdf(0))))
