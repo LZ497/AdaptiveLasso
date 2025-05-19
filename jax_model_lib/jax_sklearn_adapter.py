@@ -62,7 +62,8 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         else:
             lam_prior_vars = self.lam_prior_vars
 
-
+        if 'groups' in lam_prior_vars:
+            lam_prior_vars['groups'] = np.asarray(lam_prior_vars['groups']).astype(int)
 
         self.model_ = jax_vlMAP(
             X=X,

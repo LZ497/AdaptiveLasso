@@ -28,6 +28,7 @@ def make_gamma_mat(P):
     for i in range(P):
         gammat[:,i] = np.concatenate([tops[i], bots[i]])
     gammat -= 1
+    print(f'Gammat is: {gammat}')
     return gammat
 
 def adaptive_prior(x, pv, mod):
@@ -39,7 +40,7 @@ def group_prior(x, pv, mod):
     gamma = jnp.exp(pv['log_gamma'])
 
     if 'groups' in pv:
-        groups = pv['groups'].astype(int)  # Ensure groups are integers
+        groups = jnp.asarray(pv['groups']).astype(int)  # Always cast to int
     else:
         G = gamma.shape[0]
         P = x.shape[0]
@@ -66,6 +67,9 @@ def hier_prior(x, pv, mod):
     lam_sd = 1/jnp.sqrt(mod.N)
 
     GAMMAt = make_gamma_mat(Pu).astype(int)
+    if GAMMAt.shape[0] == 0:
+        return gamma_dens + jnp.sum(x**2)
+
     temp = 1/jnp.sqrt(Pu)
     gam_meq = jnp.apply_along_axis(lambda x: jnp.sum(jax.nn.softmax(-x/temp) * x), 0, gamma[GAMMAt])
     meq_dist =  tfpd.Normal(loc=gam_meq, scale=lam_sd)
@@ -73,7 +77,11 @@ def hier_prior(x, pv, mod):
     lam_me = x[np.arange(Pu)]
     lam_q = x[np.arange(Pu+Pi,Pu+Pi+Pq)]
     me_dens = -jnp.sum(meq_dist.log_prob(lam_me)-jnp.log(1-meq_dist.cdf(0)))
-    q_dens = -jnp.sum(meq_dist.log_prob(lam_q)-jnp.log(1-meq_dist.cdf(0)))
+    # Guard the calculation of q_dens so it only runs if lam_q is not empty
+    if lam_q.size > 0:
+        q_dens = -jnp.sum(meq_dist.log_prob(lam_q)-jnp.log(1-meq_dist.cdf(0)))
+    else:
+        q_dens = 0.0
 
     lam_i = x[np.arange(Pu,Pu+Pi)]
     i_dist =  tfpd.Normal(loc=gamma, scale=lam_sd)
