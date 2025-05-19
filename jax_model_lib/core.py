@@ -69,30 +69,6 @@ def get_vv_stdlog(vv, sd, ss, lr, tau0):
 
     return new_vv
 
-# @jit
-# def get_vv_at(vv, sd, ss, lr, tau0):
-#     # Gradient Step
-#     new_vv = {}
-#     for v in vv:
-#         new_vv[v] = vv[v] + lr*ss[v]*sd[v]
-
-#     # Proximal step
-#     if GLOB_prox=='inv':
-#         new_beta, new_lam = jax_apply_prox_inv(
-#         np.array(jax.device_get(new_vv['beta'])),
-#         np.array(jax.device_get(new_vv['lam'])),
-#         np.array(jax.device_get(tau0 * lr * ss['beta'])),
-#         np.array(jax.device_get(tau0 * lr * ss['lam'])))
-#         #new_beta, new_lam = jax_apply_prox_inv(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
-#     elif GLOB_prox=='log':
-#         new_beta, new_lam = jax_apply_prox_log(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'], 1/tau0)
-#     elif GLOB_prox=='std':
-#         new_beta, new_lam = jax_apply_prox(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
-#     new_vv['beta'] = jnp.where(ss['beta']>0, new_beta,  new_vv['beta'])
-#     new_vv['lam'] = jnp.where(ss['lam']>0, new_lam, new_vv['lam'])
-
-#     return new_vv
-
 @jit
 def get_sd(grad, ss):
     sd = {}
@@ -265,12 +241,10 @@ class jax_vlMAP:
         if self.sigma2_exp:
             sigma2 = jnp.log(sigma2)
 
-        #PP = 2*self.P if self.lik=='zinb' else self.P
         beta = jnp.zeros(self.Pb)
         lam = 1.1 * jnp.ones_like(beta)
         if len(lam.shape) == 0:  # Ensure lam is at least 1-dimensional
             lam = lam.reshape([1])
-        #lam = jnp.ones_like(beta) / (self.N+1)
 
         if self.dont_pen is not None:
             lam = lam.at[self.dont_pen].set(0.) 
@@ -282,7 +256,7 @@ class jax_vlMAP:
                 'sigma2':sigma2}
         if self.lik=='zinb':
             self.vv['beta00']=beta00
-        #self.vv = self.vv | self.lam_prior_vars
+
         if self.lam_prior_vars is None:
             self.lam_prior_vars = {}  # Ensure it's a dictionary
         if self.lam_prior_vars is None and self.lam_prior == 'adaptive':
