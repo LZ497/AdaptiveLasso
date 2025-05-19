@@ -521,7 +521,7 @@ class jax_vlMAP:
             if 'sigma2' in self.vv:
                 min_var = 1e-6
                 if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
-                    print("Non-finite or non-positive sigma2 during fit:", self.vv['sigma2'])
+                    # print("Non-finite or non-positive sigma2 during fit:", self.vv['sigma2'])
                     self.vv['sigma2'] = jnp.array(min_var)
                 if self.sigma2_exp:
                     self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], jnp.log(min_var))
