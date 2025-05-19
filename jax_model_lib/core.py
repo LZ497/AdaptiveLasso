@@ -174,7 +174,8 @@ class jax_vlMAP:
 
     def set_Xy(self, X, y):
         X = np.array(X)
-        N,self.Pu = X.shape
+        y = np.asarray(y, dtype=np.float64)  # Always cast y to float
+        N, self.Pu = X.shape
         ind_es = np.random.choice(N,self.N_es,replace=False)
         ind_train = np.setdiff1d(np.arange(N), ind_es)
         X_es = X[ind_es,:]
@@ -201,9 +202,9 @@ class jax_vlMAP:
             self.Pb = self.P
 
         self.X = np.array(X_train)
-        self.y = np.array(y_train)
+        self.y = np.array(y_train, dtype=np.float64)  # Ensure float
         self.X_es = np.array(X_es)
-        self.y_es = np.array(y_es)
+        self.y_es = np.array(y_es, dtype=np.float64)  # Ensure float
         
         if self.lam_prior == 'hier' and not self.lam_prior_vars:
             self.lam_prior_vars = {
@@ -215,6 +216,7 @@ class jax_vlMAP:
         self.Pq = self.Pu if self.quad else 0
 
     def reset_vars(self):
+        min_var = 1e-6
         # NOTE: This is indeed X.shape[0], NOT N. (Oh, is it still tho?)
         if self.lik in ['poisson','nb']:
             #beta0 = jnp.mean(jnp.log(self.y+0.5))
@@ -224,7 +226,16 @@ class jax_vlMAP:
             beta00 = jnp.mean(iz.astype(np.float64))
             beta0 = jnp.mean(jnp.log(self.y[~iz]+0.5))
         elif self.lik=='cauchy':
-            beta0 = jnp.median(self.y)
+            mu_hat = jnp.median(self.y)
+            sigma2 = jnp.median(jnp.abs(self.y - mu_hat))
+            min_var = 1e-6
+            if sigma2 < min_var:
+                print(f"Variance too small ({sigma2}), setting to {min_var}")
+                sigma2 = jnp.array(1.0)
+            if not jnp.isfinite(sigma2) or sigma2 <= 0:
+                print("Non-finite or non-positive sigma2 in reset_vars:", sigma2)
+                sigma2 = jnp.array(1.0)
+            beta0 = mu_hat
         else:
             beta0 = jnp.mean(np.array(self.y).astype(np.float64))
 
@@ -237,9 +248,17 @@ class jax_vlMAP:
             sigma2 = jnp.median(jnp.abs(self.y - mu_hat))
         else:
             sigma2 = jnp.var(self.y)
+            if sigma2 < min_var:
+                print(f"Variance too small ({sigma2}), setting to {min_var}")
+                sigma2 = jnp.array(min_var)
+            if self.sigma2_exp:
+                sigma2 = jnp.log(jnp.maximum(sigma2, min_var))
+            if not jnp.isfinite(sigma2) or sigma2 <= 0:
+                print("Non-finite or non-positive sigma2 in reset_vars:", sigma2)
+                sigma2 = jnp.array(1.0)
 
         if self.sigma2_exp:
-            sigma2 = jnp.log(sigma2)
+            sigma2 = jnp.log(jnp.maximum(sigma2, min_var))
 
         beta = jnp.zeros(self.Pb)
         lam = 1.1 * jnp.ones_like(beta)
@@ -266,11 +285,11 @@ class jax_vlMAP:
 
         self.lam_prior_vars_init = {}
         for v in lam_prior_vars:
+            if v == 'groups':
+                continue  # Do not treat groups as a differentiable parameter
             self.lam_prior_vars_init[v] = jnp.copy(lam_prior_vars[v])
-
-        for v in lam_prior_vars:
             self.lam_prior_vars[v] = jnp.copy(lam_prior_vars[v])
-        self.vv = {**self.vv, **self.lam_prior_vars}
+        self.vv = {**self.vv, **{k: v for k, v in self.lam_prior_vars.items() if k != 'groups'}}
 
         for v in self.vv:
             if len(self.vv[v].shape)==0:
@@ -499,6 +518,15 @@ class jax_vlMAP:
                 next_vv = get_vv_stdlog(self.vv, sd, ss, lr_use, self.tau0)
             #next_vv = get_vv_at(self.vv, sd, ss, lr_use, self.tau0)
             self.vv = next_vv
+            if 'sigma2' in self.vv:
+                min_var = 1e-6
+                if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
+                    # print("Non-finite or non-positive sigma2 during fit:", self.vv['sigma2'])
+                    self.vv['sigma2'] = jnp.array(min_var)
+                if self.sigma2_exp:
+                    self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], jnp.log(min_var))
+                else:
+                    self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], min_var)
             self.last_it = i
 
 
@@ -519,7 +547,8 @@ class jax_vlMAP:
         if self.lik == 'normal':
             dist_pred = tfpd.Normal(preds, scale=stddev)
         elif self.lik == 'cauchy':
-            dist_pred = tfpd.Cauchy(loc=preds, scale=stddev)
+            dist_pred = tfpd.Cauchy(loc=preds, scale=jnp.maximum(stddev, 1e-8))
+            dist_pred = tfpd.Deterministic(loc=jnp.clip(preds, -10, 10))
         elif self.lik == 'bernoulli':
             dist_pred = tfpd.Bernoulli(logits=preds)
         elif self.lik == 'poisson':
