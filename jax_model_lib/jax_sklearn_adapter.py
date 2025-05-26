@@ -84,7 +84,17 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         return self
 
     def predict(self, X):
-        return np.array(self.model_.predictive(np.asarray(X)).mean())
+        if self.lik == 'cauchy':
+            # For Cauchy, use clipped location parameter directly instead of mean()
+            X_arr = np.asarray(X)
+            beta = self.model_.vv['beta']
+            beta0 = self.model_.vv['beta0']
+            # Calculate predictions and clip to avoid extreme values
+            preds = X_arr @ beta + beta0
+            return np.clip(np.array(preds), -10, 10)
+        else:
+            # Use normal prediction for other likelihoods
+            return np.array(self.model_.predictive(np.asarray(X)).mean())
 
     def score(self, X, y):
         y_pred = self.predict(X)
