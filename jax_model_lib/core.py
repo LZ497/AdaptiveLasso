@@ -228,14 +228,13 @@ class jax_vlMAP:
         elif self.lik=='cauchy':
             mu_hat = jnp.median(self.y)
             sigma2 = jnp.median(jnp.abs(self.y - mu_hat))
-            min_var = 1e-6
-            if sigma2 < min_var:
-                print(f"Variance too small ({sigma2}), setting to {min_var}")
-                sigma2 = jnp.array(1.0)
-            if not jnp.isfinite(sigma2) or sigma2 <= 0:
-                print("Non-finite or non-positive sigma2 in reset_vars:", sigma2)
-                sigma2 = jnp.array(1.0)
+            min_var = 1.0
+            if sigma2 < min_var or not jnp.isfinite(sigma2):
+                sigma2 = jnp.array(min_var)
             beta0 = mu_hat
+            # If using sigma2_exp, take log after clamping
+            if self.sigma2_exp:
+                sigma2 = jnp.log(jnp.maximum(sigma2, min_var))
         else:
             beta0 = jnp.mean(np.array(self.y).astype(np.float64))
 
@@ -243,9 +242,6 @@ class jax_vlMAP:
             sigma2 = jnp.array(1.)
         elif self.lik in ['zinb']:
             sigma2 = jnp.array(1.)
-        elif self.lik =='cauchy':
-            mu_hat = jnp.median(self.y)
-            sigma2 = jnp.median(jnp.abs(self.y - mu_hat))
         else:
             sigma2 = jnp.var(self.y)
             if sigma2 < min_var:
@@ -489,7 +485,8 @@ class jax_vlMAP:
             else:
                 cost_prior, grad_prior = self.eval_prior_grad(self.vv, self.tau0)
 
-            self.costs[i] = self.N/self.mb_size*cost_nll + sum(cost_prior)
+            self.costs[i] = self.N / self.mb_size * cost_nll + sum(cost_prior)
+            print(f"Iteration {i}, Cost: {self.costs[i]}, NLL: {cost_nll}, Prior: {cost_prior}")
             if not np.isfinite(self.costs[i]):
                 print("Infinite cost!")
                 import IPython; IPython.embed()
@@ -518,7 +515,12 @@ class jax_vlMAP:
                 next_vv = get_vv_stdlog(self.vv, sd, ss, lr_use, self.tau0)
             #next_vv = get_vv_at(self.vv, sd, ss, lr_use, self.tau0)
             self.vv = next_vv
-            if 'sigma2' in self.vv:
+            if 'sigma2' in self.vv and self.lik == 'cauchy':
+                min_var = 1.0  # or 1e-3, but 1.0 is safer for Cauchy
+                if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
+                    self.vv['sigma2'] = jnp.array(min_var)
+                self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], min_var)
+            elif 'sigma2' in self.vv:
                 min_var = 1e-6
                 if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
                     # print("Non-finite or non-positive sigma2 during fit:", self.vv['sigma2'])
@@ -547,8 +549,12 @@ class jax_vlMAP:
         if self.lik == 'normal':
             dist_pred = tfpd.Normal(preds, scale=stddev)
         elif self.lik == 'cauchy':
-            dist_pred = tfpd.Cauchy(loc=preds, scale=jnp.maximum(stddev, 1e-8))
-            dist_pred = tfpd.Deterministic(loc=jnp.clip(preds, -10, 10))
+            # Ensure scale parameter is always large (crucial for Cauchy stability)
+            stddev = jnp.maximum(stddev, 1.0)
+            
+            # Create a standard Cauchy with clipped location parameter
+            loc = jnp.clip(preds, -10, 10)  # Clip to avoid extreme predictions
+            dist_pred = tfpd.Cauchy(loc=loc, scale=stddev)
         elif self.lik == 'bernoulli':
             dist_pred = tfpd.Bernoulli(logits=preds)
         elif self.lik == 'poisson':
