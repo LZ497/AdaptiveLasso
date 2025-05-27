@@ -28,7 +28,6 @@ def make_gamma_mat(P):
     for i in range(P):
         gammat[:,i] = np.concatenate([tops[i], bots[i]])
     gammat -= 1
-    print(f'Gammat is: {gammat}')
     return gammat
 
 def adaptive_prior(x, pv, mod):
@@ -60,31 +59,31 @@ def hier_prior(x, pv, mod):
     Pu = mod.Pu
     Pi = mod.Pi
     Pq = mod.Pq
+
     gamma = jnp.exp(pv['log_gamma'])
     gamma_dist = tfpd.Cauchy(loc=0., scale=1.)
-    gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma)-jnp.log((1-gamma_dist.cdf(0))))
+    gamma_dens = -jnp.sum(gamma_dist.log_prob(gamma) - jnp.log(1 - gamma_dist.cdf(0)))
 
-    lam_sd = 1/jnp.sqrt(mod.N)
+    lam_sd = 1 / jnp.sqrt(mod.N)
 
     GAMMAt = make_gamma_mat(Pu).astype(int)
-    if GAMMAt.shape[0] == 0:
+    if GAMMAt.shape[0] == 0 or Pu == 0:
         return gamma_dens + jnp.sum(x**2)
 
-    temp = 1/jnp.sqrt(Pu)
-    gam_meq = jnp.apply_along_axis(lambda x: jnp.sum(jax.nn.softmax(-x/temp) * x), 0, gamma[GAMMAt])
-    meq_dist =  tfpd.Normal(loc=gam_meq, scale=lam_sd)
+    temp = 1 / jnp.sqrt(Pu)
+    gam_meq = jnp.apply_along_axis(lambda x_: jnp.sum(jax.nn.softmax(-x_ / temp) * x_), 0, gamma[GAMMAt])
+    meq_dist = tfpd.Normal(loc=gam_meq, scale=lam_sd)
 
-    lam_me = x[np.arange(Pu)]
-    lam_q = x[np.arange(Pu+Pi,Pu+Pi+Pq)]
-    me_dens = -jnp.sum(meq_dist.log_prob(lam_me)-jnp.log(1-meq_dist.cdf(0)))
-    # Guard the calculation of q_dens so it only runs if lam_q is not empty
-    if lam_q.size > 0:
-        q_dens = -jnp.sum(meq_dist.log_prob(lam_q)-jnp.log(1-meq_dist.cdf(0)))
-    else:
-        q_dens = 0.0
+    # Split lambda into components
+    lam_me = x[0:Pu] if Pu > 0 else jnp.array([])
+    lam_i = x[Pu:Pu + Pi] if Pi > 0 else jnp.array([])
+    lam_q = x[Pu + Pi:Pu + Pi + Pq] if Pq > 0 else jnp.array([])
 
-    lam_i = x[np.arange(Pu,Pu+Pi)]
-    i_dist =  tfpd.Normal(loc=gamma, scale=lam_sd)
-    i_dens = -jnp.sum(i_dist.log_prob(lam_i)-jnp.log(1-i_dist.cdf(0)))
+    # Calculate densities only for non-empty arrays
+    me_dens = -jnp.sum(meq_dist.log_prob(lam_me) - jnp.log(1 - meq_dist.cdf(0))) if lam_me.size > 0 else 0.0
+    q_dens = -jnp.sum(meq_dist.log_prob(lam_q) - jnp.log(1 - meq_dist.cdf(0))) if lam_q.size > 0 else 0.0
+
+    i_dist = tfpd.Normal(loc=gamma[:Pi], scale=lam_sd) if Pi > 0 else None
+    i_dens = -jnp.sum(i_dist.log_prob(lam_i) - jnp.log(1 - i_dist.cdf(0))) if Pi > 0 else 0.0
 
     return gamma_dens + me_dens + q_dens + i_dens

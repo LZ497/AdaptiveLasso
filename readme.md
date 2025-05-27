@@ -1,3 +1,17 @@
+# AdaptiveLasso
+
+Sparse Bayesian regression with JAX and sklearn interface.
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+See `compare_loss_adaptiveLoss.ipynb` for examples and test cases.
+
 # jax_model_lib
 
 `jax_model_lib` is a sparse Bayesian regression library implemented in JAX with support for adaptive and hierarchical priors. It includes an `sklearn`-compatible wrapper for integration into standard machine learning pipelines.
@@ -79,6 +93,8 @@ pipe.fit(X, y)
 y_pred = pipe.predict(X)
 r2 = pipe.score(X, y)
 ```
+
+> **Note:** For heavy-tailed likelihoods like `'cauchy'`, use `RobustScaler` instead of `StandardScaler` for better stability.
 
 ---
 

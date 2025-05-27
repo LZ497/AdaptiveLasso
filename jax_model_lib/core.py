@@ -208,7 +208,7 @@ class jax_vlMAP:
         
         if self.lam_prior == 'hier' and not self.lam_prior_vars:
             self.lam_prior_vars = {
-            'log_gamma': np.zeros(self.Pu)}
+            'log_gamma': np.zeros(self.Pi)}
         
     # Define Pi and Pq for hierarchical prior logic
         num_interactions = int(scipy.special.binom(self.Pu, 2)) if self.quad or self.intr else 0
@@ -287,9 +287,7 @@ class jax_vlMAP:
             self.lam_prior_vars[v] = jnp.copy(lam_prior_vars[v])
         self.vv = {**self.vv, **{k: v for k, v in self.lam_prior_vars.items() if k != 'groups'}}
 
-        for v in self.vv:
-            if len(self.vv[v].shape)==0:
-                self.vv[v] = self.vv[v].reshape([1])
+        self.vv = _normalize_shapes(self.vv)
         self.last_beta = np.array(self.vv['beta'])
 
         self.best_vv = {}
@@ -486,7 +484,7 @@ class jax_vlMAP:
                 cost_prior, grad_prior = self.eval_prior_grad(self.vv, self.tau0)
 
             self.costs[i] = self.N / self.mb_size * cost_nll + sum(cost_prior)
-            print(f"Iteration {i}, Cost: {self.costs[i]}, NLL: {cost_nll}, Prior: {cost_prior}")
+            # print(f"Iteration {i}, Cost: {self.costs[i]}, NLL: {cost_nll}, Prior: {cost_prior}")
             if not np.isfinite(self.costs[i]):
                 print("Infinite cost!")
                 import IPython; IPython.embed()
@@ -523,7 +521,6 @@ class jax_vlMAP:
             elif 'sigma2' in self.vv:
                 min_var = 1e-6
                 if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
-                    # print("Non-finite or non-positive sigma2 during fit:", self.vv['sigma2'])
                     self.vv['sigma2'] = jnp.array(min_var)
                 if self.sigma2_exp:
                     self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], jnp.log(min_var))
@@ -725,3 +722,10 @@ def jax_apply_prox_inv(x0, lam0, sx, sl):
     xcand *= (1-xiszero)*xcand
 
     return xcand, lamcand
+
+def _normalize_shapes(vv):
+    """Ensure all vv values are at least 1D arrays."""
+    for k in vv:
+        if hasattr(vv[k], 'shape') and len(vv[k].shape) == 0:
+            vv[k] = vv[k].reshape([1])
+    return vv
