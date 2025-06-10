@@ -3,6 +3,7 @@
 
 import numpy as np
 import scipy
+import copy
 from time import time
 import jax
 import jax.numpy as jnp
@@ -14,7 +15,7 @@ from jax_model_lib.quartic_roots import quartic_roots
 from tensorflow_probability.substrates import jax as tfp
 tfpd = tfp.distributions
 
-global GLOB_prox
+# al  _prox
 
 jax.config.update("jax_enable_x64", True)
 
@@ -41,34 +42,6 @@ def get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, mb_size, N):
         sd[v] = -(N/mb_size*(grad_nll[v] - grad_nll0[v]) + g0[v]  + grad_prior[v])
     return sd
 
-def get_vv_inv(vv, sd, ss, lr, tau0):
-    # Gradient step outside of jit
-    new_vv = {v: vv[v] + lr * ss[v] * sd[v] for v in vv}
-
-    x0 = np.array(jax.device_get(new_vv['beta']))
-    lam0 = np.array(jax.device_get(new_vv['lam']))
-    sx = np.array(jax.device_get(tau0 * lr * ss['beta']))
-    sl = np.array(jax.device_get(tau0 * lr * ss['lam']))
-
-    new_beta, new_lam = jax_apply_prox_inv(x0, lam0, sx, sl)
-
-    new_vv['beta'] = jnp.where(ss['beta'] > 0, new_beta, new_vv['beta'])
-    new_vv['lam']  = jnp.where(ss['lam']  > 0, new_lam,  new_vv['lam'])
-    return new_vv
-
-@jit
-def get_vv_stdlog(vv, sd, ss, lr, tau0):
-    new_vv = {v: vv[v] + lr * ss[v] * sd[v] for v in vv}
-
-    if GLOB_prox == 'log':
-        new_beta, new_lam = jax_apply_prox_log(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'], 1/tau0)
-    elif GLOB_prox == 'std':
-        new_beta, new_lam = jax_apply_prox(new_vv['beta'], new_vv['lam'], tau0*lr*ss['beta'], tau0*lr*ss['lam'])
-    new_vv['beta'] = jnp.where(ss['beta'] > 0, new_beta, new_vv['beta'])
-    new_vv['lam']  = jnp.where(ss['lam'] > 0, new_lam,  new_vv['lam'])
-
-    return new_vv
-
 @jit
 def get_sd(grad, ss):
     sd = {}
@@ -76,16 +49,17 @@ def get_sd(grad, ss):
         sd[v] = -grad[v]*ss[v]
     return(sd)
 
+
 class jax_vlMAP:
     auto_N_sg = 5000
 
-    def __init__(self, X, y, lam_prior, lam_prior_vars, big_N = None, tau0=1, lik='normal', mb_size = None, no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
+    def __init__(self, X, y, lam_prior, lam_prior_vars, big_N = None, tau0=1, lik='normal', mb_size = None, snapshot_interval=10,no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
         self.custom_prox = custom_prox
         self.custom_prior = custom_prior
         self.custom_nll_grad = custom_nll_grad
         self.lik = lik
         self.tau0 = tau0
-        self.big_N = big_N
+        #self.big_N = big_N
         assert tau0 > 0
         self.no_adapt = no_adapt
         self.lam_prior_vars = lam_prior_vars if lam_prior_vars is not None else {} 
@@ -97,6 +71,15 @@ class jax_vlMAP:
         self.l2_coef = l2_coef
         self.beta0_init = beta0_init 
         self.do_jit = do_jit
+        self.snapshot_interval = snapshot_interval
+
+        assert not (self.logprox and self.invlam), "logprox and invlam cannot both be True: incompatible modes of λ treatment."
+        if self.invlam:
+            self.prox_mode = 'inv'
+        elif self.logprox:
+            self.prox_mode = 'log'
+        else:
+            self.prox_mode = 'std'
 
         assert not (intr and quad)
         self.intr = intr
@@ -131,16 +114,6 @@ class jax_vlMAP:
         self.es_every = self.batches_per_epoch
 
 
-        assert not (self.logprox and self.invlam)
-
-        global GLOB_prox
-        if self.invlam:
-            GLOB_prox='inv'
-        elif self.logprox:
-            GLOB_prox='log'
-        else:
-            GLOB_prox='std'
-
         self.dont_pen = dont_pen
         if self.dont_pen is not None:
             self.do_pen = np.array(list(set(np.arange(self.Pb)).difference(dont_pen))).astype(int)
@@ -159,7 +132,6 @@ class jax_vlMAP:
 
         # Adam parameters.
         self.beta_adam = 0.5
-        #self.beta_adam = 0.999
         self.eps_adam = 1e-7
 
         if self.lik in ['poisson','nb']:
@@ -300,24 +272,27 @@ class jax_vlMAP:
             nll = -jnp.sum(self._predictive(X, vv).log_prob(y))
             return nll
 
-        if GLOB_prox=='std':
+        if self.prox_mode == 'std':
+                def eval_prior_nonsmooth(vv, tau0):
+                    ll = vv['lam']
+                    npd_ns = tau0 * jnp.sum(ll * jnp.abs(vv['beta']))
+                    return npd_ns
+
+        elif self.prox_mode == 'log':
             def eval_prior_nonsmooth(vv, tau0):
                 ll = vv['lam']
-                npd_ns = tau0*jnp.sum(ll * jnp.abs(vv['beta']))
-                return npd_ns
-        elif GLOB_prox=='log':
-            def eval_prior_nonsmooth(vv, tau0):
-                ll = vv['lam']
-                npd_ns = tau0*jnp.sum(ll * jnp.abs(vv['beta']))
+                npd_ns = tau0 * jnp.sum(ll * jnp.abs(vv['beta']))
                 llp_uni = -jnp.sum(jnp.log(vv['lam'][self.do_pen]))
                 return npd_ns + llp_uni
-        elif GLOB_prox=='inv':
+
+        elif self.prox_mode == 'inv':
             def eval_prior_nonsmooth(vv, tau0):
-                ll = 1/vv['lam']
-                npd_ns = tau0*jnp.sum(ll * jnp.abs(vv['beta']))
+                ll = 1.0 / vv['lam']
+                npd_ns = tau0 * jnp.sum(ll * jnp.abs(vv['beta']))
                 return npd_ns
+
         else:
-            assert False
+            raise ValueError(f"Invalid prox_mode: {self.prox_mode}")
 
         def eval_prior(vv, tau0):
             # Beta prior
@@ -366,7 +341,6 @@ class jax_vlMAP:
         eval_prior_grad = jax.value_and_grad(eval_prior, has_aux = True)
 
         if do_jit:
-            ## NOTE: If moving this, make sure to fix tau0 and any other globals.
             self.eval_nll_grad_subset = jit(eval_nll_grad_subset)
             self.eval_prior_grad = jit(eval_prior_grad)
             self.adam_update_ss = jit(adam_update_ss_nojit)
@@ -378,8 +352,41 @@ class jax_vlMAP:
     def init_adam(self):
         return dict([(v,np.zeros_like(self.vv[v])) for v in self.vv]), dict([(v,np.zeros_like(self.vv[v])) for v in self.vv])
 
-    def fit(self, max_iters = 10000, lr_pre=1e-2, verbose = True, debug = np.inf, hoardlarge = False, ada = False, warm_up = False, limit_lam_ss = False, prefit = False):
-        global GLOB_prox
+    def snapshot_update(self):
+        self.snapshot_vv = copy.deepcopy(self.vv)
+        _, self.g0 = self.eval_nll_grad_subset(self.snapshot_vv, self.X, self.y)
+
+    def compute_grad_svrg(self, X_batch, y_batch, grad_prior):
+        if self.custom_nll_grad:
+            _, grad_nll = self.custom_nll_grad(self.vv, X_batch, y_batch)
+            _, grad_nll0 = self.custom_nll_grad(self.snapshot_vv, X_batch, y_batch)
+        else:
+            _, grad_nll = self.eval_nll_grad_subset(self.vv, X_batch, y_batch)
+            _, grad_nll0 = self.eval_nll_grad_subset(self.snapshot_vv, X_batch, y_batch)
+        sd = get_sd_svrg(grad_nll, grad_nll0, self.g0, grad_prior, self.mb_size, self.N)
+        return sd
+    
+    def get_vv(self, vv, sd, ss, lr, tau0):
+        new_vv = {v: vv[v] + lr * ss[v] * sd[v] for v in vv}
+
+        x0 = np.array(jax.device_get(new_vv['beta']))
+        lam0 = np.array(jax.device_get(new_vv['lam']))
+        sx = np.array(jax.device_get(tau0 * lr * ss['beta']))
+        sl = np.array(jax.device_get(tau0 * lr * ss['lam']))
+
+        if self.prox_mode == 'inv':
+            new_beta, new_lam = jax_apply_prox_inv(x0, lam0, sx, sl)
+        elif self.prox_mode == 'log':
+            new_beta, new_lam = jax_apply_prox_log(x0, lam0, sx, sl, 1 / tau0)
+        else:
+            new_beta, new_lam = jax_apply_prox(x0, lam0, sx, sl)
+
+        new_vv['beta'] = jnp.where(ss['beta'] > 0, new_beta, new_vv['beta'])
+        new_vv['lam'] = jnp.where(ss['lam'] > 0, new_lam, new_vv['lam'])
+        return new_vv
+    
+    def fit(self, max_iters = 300, lr_pre=1e-2, verbose = True, debug = np.inf, hoardlarge = False, ada = False, warm_up = False, limit_lam_ss = False, prefit = False):
+
         if ada:
             lr = lr_pre
         else:
@@ -412,6 +419,9 @@ class jax_vlMAP:
                         self.tracking[v] = np.zeros((max_iters,)+self.vv[v].shape)
 
         for i in tqdm(range(max_iters), disable = not verbose, smoothing = 0.):
+            
+            if self.is_stochastic and i % self.snapshot_interval == 0:
+                self.snapshot_update()
 
             if self.tracking:
                 for v in self.vv:
@@ -465,11 +475,8 @@ class jax_vlMAP:
                 Xs_use = Xs
             if self.custom_nll_grad:
                 cost_nll, grad_nll = self.custom_nll_grad(self.vv, Xs_use, ys)
-                # Also compute grad_nll0 using the custom function
-                _, grad_nll0 = self.custom_nll_grad(self.vv0, Xs_use, ys)
             else:
                 cost_nll, grad_nll = self.eval_nll_grad_subset(self.vv, Xs_use, ys)
-                _, grad_nll0 = self.eval_nll_grad_subset(self.vv0, Xs_use, ys)
             if self.custom_prior:
                 cost_prior, grad_from_prior = self.custom_prior(self.vv['lam'], self.vv, self)
                 grad_prior = {}
@@ -490,7 +497,13 @@ class jax_vlMAP:
                 import IPython; IPython.embed()
                 break
 
-            sd = get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, self.mb_size, self.N)
+            #sd = get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, self.mb_size, self.N)
+            if self.is_stochastic and self.vv0 is not None and g0 is not None:
+                sd = self.compute_grad_svrg(Xs_use, ys, grad_prior)
+            else:
+                for k in grad_nll:
+                    grad_nll[k] += grad_prior[k]
+                sd = grad_nll
 
             if ada:
                 adam_grad = sd
@@ -507,11 +520,7 @@ class jax_vlMAP:
                 pf_vars = ['beta','lam']+list(self.lam_prior_vars.keys())
                 for v in pf_vars:
                     ss[v] *= 0
-            if GLOB_prox == 'inv':
-                next_vv = get_vv_inv(self.vv, sd, ss, lr_use, self.tau0)
-            else:
-                next_vv = get_vv_stdlog(self.vv, sd, ss, lr_use, self.tau0)
-            #next_vv = get_vv_at(self.vv, sd, ss, lr_use, self.tau0)
+            next_vv = self.get_vv(self.vv, sd, ss, lr_use, self.tau0)
             self.vv = next_vv
             if 'sigma2' in self.vv and self.lik == 'cauchy':
                 min_var = 1.0  # or 1e-3, but 1.0 is safer for Cauchy
@@ -593,44 +602,64 @@ class jax_vlMAP:
         return self._predictive(XX, self.vv)
 
 
-    def plot(self, fname = 'fit.png'):
-        if self.track:
-            nvars = len(self.tracking)
-        else:
-            nvars = 0
-        nfigs = nvars + 3
-        if self.is_stochastic:
-            nfigs += 1
-        nrows = int(np.ceil(nfigs/2))
-        ncols = 2
+    def plot(self, fname='fit.png'):
+        if not self.track:
+            return  # no plot if nothing tracked
 
-        fig = plt.figure(figsize=[ncols*5,nrows*2])
+        tracked_vars = list(self.tracking.keys())
+        n_tracked = len(tracked_vars)
+        nfigs = 3 + n_tracked + (1 if self.is_stochastic else 0)
+        nrows, ncols = int(np.ceil(nfigs / 2)), 2
 
-        plt.subplot(nrows,ncols,1)
-        plt.plot(self.costs[:(self.last_it+1)])
-        ax = plt.gca()
-        ax1 = ax.twinx()
-        ax1.plot(self.es_every*np.arange(len(self.nll_es)), self.nll_es, color = 'orange')
-        plt.title('Cost')
-        plt.subplot(nrows,ncols,3)
-        plt.plot(np.log10(1+self.costs[:self.last_it]-np.min(self.costs[:self.last_it])))
-        plt.title('Optimality Gap (log(1+))')
+        fig = plt.figure(figsize=(ncols * 5, nrows * 2))
+        plot_idx = 1
 
-        if self.track:
-            for vi,v in enumerate(self.tracking):
-                plt.subplot(nrows,ncols,1+3+vi)
-                plt.plot(self.tracking[v][:(self.last_it+1)])
-                if v=='beta':
-                    sparsity = np.mean(self.tracking[v][:self.last_it]==0,axis=1)
-                    ax = plt.gca().twinx()
-                    ax.plot(sparsity, color = 'green', linestyle='--')
-                if v=='lam':
-                    plt.yscale('log')
-                plt.title(v)
+        # Plot cost
+        ax = fig.add_subplot(nrows, ncols, plot_idx)
+        ax.plot(self.costs[:self.last_it+1])
+        ax.set_title('Cost')
+        ax2 = ax.twinx()
+        ax2.plot(self.es_every * np.arange(len(self.nll_es)), self.nll_es, color='orange')
+        plot_idx += 1
+
+        # Plot optimality gap
+        ax = fig.add_subplot(nrows, ncols, plot_idx)
+        gap = np.log10(1 + self.costs[:self.last_it] - np.min(self.costs[:self.last_it]))
+        ax.plot(gap)
+        ax.set_title('Optimality Gap (log(1+))')
+        plot_idx += 1
+
+        # Plot tracked variables
+        for v in tracked_vars:
+            ax = fig.add_subplot(nrows, ncols, plot_idx)
+            ax.plot(self.tracking[v][:self.last_it+1])
+            ax.set_title(v)
+
+            if v == 'beta':
+                sparsity = np.mean(self.tracking[v][:self.last_it] == 0, axis=1)
+                ax2 = ax.twinx()
+                ax2.plot(sparsity, color='green', linestyle='--')
+                ax2.set_ylabel('Sparsity')
+
+            if v == 'lam':
+                ax.set_yscale('log')
+
+            plot_idx += 1
+
+        # Final beta bar plot (feature selection summary)
+        ax = fig.add_subplot(nrows, ncols, plot_idx)
+        final_beta = self.tracking['beta'][self.last_it]
+        x = np.arange(len(final_beta))
+        ax.bar(x, final_beta)
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(i) for i in x])
+        ax.set_title('Final Beta (Feature Selection)')
+        ax.axhline(0, color='black', linewidth=0.5)
+        ax.set_xticklabels([str(i) for i in x], rotation=90)
 
         plt.tight_layout()
-        plt.savefig(fname)
-        plt.close()
+        plt.show()
+
 
 def sto(x0,lam,sx):
     return jnp.maximum(0,jnp.abs(x0)-lam*sx)*jnp.sign(x0)

@@ -80,13 +80,13 @@ y_pred = model.predictive(X).mean()
 ### Example
 
 ```python
-from jax_sklearn_adapter import JaxSparseRegressor
+from jax_sklearn_adapter import MAPAdaptiveLasso
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 pipe = Pipeline([
     ('scale', StandardScaler()),
-    ('jax_model', JaxSparseRegressor())
+    ('jax_model', MAPAdaptiveLasso())
 ])
 
 pipe.fit(X, y)
@@ -101,16 +101,17 @@ r2 = pipe.score(X, y)
 ## Parameters
 
 
-### JaxSparseRegressor
+### MAPAdaptiveLasso
 
 | Parameter         | Type          | Default      | Description |
 |------------------|---------------|--------------|-------------|
 | `tau0`           | float         | 1.0          | Initial noise precision (inverse variance) of the likelihood. |
 | `max_iters`      | int           | 300          | Maximum number of training iterations. |
 | `lr_pre`         | float         | 0.01         | Learning rate for the preconditioned gradient updates. |
-| `mb_size`        | int           | 50           | Mini-batch size for stochastic updates. |
+| `mb_size`        | int or None   | None          | Mini-batch size for stochastic updates. When `mb_size` is a positive integer and N >`mb_size`, SVRG is automatically enabled. If `None`, full-batch gradient descent is used. |
+| `snapshot_interval` | int | 10  | Number of iterations between SVRG snapshot updates. Effective only when `mb_size` is set and N > `mb_size`. Ignored during full-batch training. |
 | `invlam`         | bool          | False        | If True, use inverse-λ formulation in optimization. |
-| `logprox`        | bool          | False        | Whether to apply log-transform before applying proximal update. |
+| `logprox`        | bool          | True        | Whether to apply log-transform before applying proximal update. |
 | `track`          | bool          | False        | If True, track and store training metrics for analysis. |
 | `lam_prior`      | str           | 'adaptive'   | Type of prior for λ. Options: `'adaptive'`, `'group'`, `'hier'`. |
 | `lam_prior_vars` | dict or None  | None         | Variables required by selected prior (e.g. `'log_gamma'`, `'groups'`). If None and prior is `'group'`, it is generated automatically. |
@@ -119,14 +120,25 @@ r2 = pipe.score(X, y)
 | `custom_nll_grad`| callable or None | None      | Custom negative log-likelihood and its gradient. Used when `lik='none'`. |
 | `custom_prior`   | callable or None | None      | Custom prior penalty and its gradient. Overrides default one from `lam_prior`. |
 
+
 ---
-  
+> **Note on λ Penalty Mode Combinations**  
+> Only one of `logprox` or `invlam` can be set to `True`. The fourth combination is invalid and explicitly blocked.
+
+| `logprox` | `invlam` | Penalty Formulation| Description |
+|------------------|---------------|--------------|-------------|
+| `False`   | `False`  | lambda * abs(beta) | Standard Lasso: lambda is a free parameter, jointly optimized with beta. |
+| `True`    | `False`  | lambda * abs(beta) + log(lambda) | MAP with log-prior: lambda jointly optimized with log-barrier. |
+| `False`   | `True`   | abs(beta) / lambda| Adaptive Lasso: lambda fixed from initial beta estimate and not updated.   |
+| `True`    | `True`   | abs(beta) / lambda - log(lambda)| Inverse-lambda MAP form (not implemented; disallowed in code).|
 
 
-> **Note on `lam_prior='group'`**:  
+
+
+> **Note on `lam_prior='group'`**  
 > If `lam_prior_vars` is not explicitly provided, the number of groups is set to `G = ceil(sqrt(P))`.  
-> Features are uniformly assigned to groups via `groups = np.repeat(np.arange(G), P // G + 1)[:P]`.  
-> `log_gamma` is initialized as zeros, implying unit group weight.  
+Features are uniformly assigned to groups via `groups = np.repeat(np.arange(G), P // G + 1)[:P]`.  
+`log_gamma` is initialized as zeros, implying unit group weight.  
 
 
 ## Attributes
@@ -136,8 +148,35 @@ r2 = pipe.score(X, y)
 | `model_`      | The fitted `jax_vlMAP` model instance. |
 | `beta`        | Fitted regression coefficients. |
 | `costs`       | List of objective function values over iterations (if `track=True`). |
+| `plot_cost()` | Method to visualize training objective over iterations (if `track=True`). |
+| `plot()`      | Saves full diagnostic plots including final beta bar chart (if `track=True`). |
 
----
+
+## Visualization
+
+When `track=True`, calling `.plot()` on the fitted model will output a multi-panel training diagnostic figure including:
+
+- Objective cost over iterations
+- Optimality gap (log-scale)
+- Coefficient evolution (`beta`) and sparsity ratio
+- Lambda dynamics (`lam`) with log-scale
+- Auxiliary parameters (e.g., `beta0`, `sigma2`, `log_gamma`)
+- Final beta bar plot showing selected features and their importance
+
+## SVRG Optimization
+
+This library supports Stochastic Variance Reduced Gradient (SVRG) for improved optimization stability and convergence. When `mb_size` is set and N > `mb_size`, SVRG is automatically activated.  
+During training:
+- Every svrg_every = ceil(N / mb_size) iterations, a snapshot of the model parameters is stored.
+- Full gradients (`g0`) are computed over the entire dataset.
+- Gradients for mini-batches are corrected using the SVRG control variate formula:
+
+```python
+sd[v] = -(N/mb_size * (grad_nll[v] - grad_nll0[v]) + g0[v] + grad_prior[v])
+```
+This improves convergence, especially in settings with high-variance stochastic gradients.  
+- Use snapshot_interval to control how frequently snapshots are taken.  
+- If mb_size is None, full-batch gradient descent is used instead.
 
 ## Notes
 
