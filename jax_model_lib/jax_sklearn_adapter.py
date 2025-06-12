@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 from jax_model_lib import jax_vlMAP, adaptive_prior, group_prior, hier_prior
 
-class JaxSparseRegressor(BaseEstimator, RegressorMixin):
+class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         tau0=1.0,
@@ -10,7 +10,7 @@ class JaxSparseRegressor(BaseEstimator, RegressorMixin):
         lr_pre=0.01,
         mb_size=50,
         invlam=False,
-        logprox=False,
+        logprox=True,
         track=False,
         lam_prior='adaptive',
         lam_prior_vars=None,
