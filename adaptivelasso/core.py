@@ -11,7 +11,7 @@ from tqdm import tqdm
 from jax import jit
 import matplotlib.pyplot as plt
 from functools import partial
-from jax_model_lib.quartic_roots import quartic_roots
+from adaptivelasso.quartic_roots import quartic_roots
 from tensorflow_probability.substrates import jax as tfp
 tfpd = tfp.distributions
 
@@ -53,7 +53,7 @@ def get_sd(grad, ss):
 class jax_vlMAP:
     auto_N_sg = 5000
 
-    def __init__(self, X, y, lam_prior, lam_prior_vars, big_N = None, tau0=1, lik='normal', mb_size = None, snapshot_interval=10,no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
+    def __init__(self, X, y, lam_prior, lam_prior_vars, tau0=1, lik='normal', mb_size = None, snapshot_interval=10,no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
         self.custom_prox = custom_prox
         self.custom_prior = custom_prior
         self.custom_nll_grad = custom_nll_grad

@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
-from jax_model_lib import jax_vlMAP, adaptive_prior, group_prior, hier_prior
+from adaptivelasso import jax_vlMAP, adaptive_prior, group_prior, hier_prior
 
 class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
     def __init__(
@@ -64,6 +64,12 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
 
         if 'groups' in lam_prior_vars:
             lam_prior_vars['groups'] = np.asarray(lam_prior_vars['groups']).astype(int)
+        
+        if self.logprox and self.invlam:
+            raise ValueError("Invalid configuration: logprox=True and invlam=True is disallowed.")
+
+        if 'log_gamma' in lam_prior_vars:
+            lam_prior_vars['log_gamma'] = np.clip(lam_prior_vars['log_gamma'], -10.0, 10.0)
 
         self.model_ = jax_vlMAP(
             X=X,

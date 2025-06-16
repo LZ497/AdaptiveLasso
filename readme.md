@@ -12,9 +12,9 @@ pip install -r requirements.txt
 
 See `compare_loss_adaptiveLoss.ipynb` for examples and test cases.
 
-# jax_model_lib
+# adaptivelasso
 
-`jax_model_lib` is a sparse Bayesian regression library implemented in JAX with support for adaptive and hierarchical priors. It includes an `sklearn`-compatible wrapper for integration into standard machine learning pipelines.
+`adaptivelasso` is a sparse Bayesian regression library implemented in JAX with support for adaptive and hierarchical priors. It includes an `skcompat`-compatible wrapper for integration into standard machine learning pipelines.
 
 ---
 
@@ -34,11 +34,11 @@ pip install -r requirements.txt
 
 ```
 your_project/
-├── jax_model_lib/
+├── adaptivelasso/
 │   ├── __init__.py
 │   ├── core.py
 │   ├── priors.py
-│   └── jax_sklearn_adapter.py
+│   └── skcompat.py
 ├── your_script.py
 ```
 
@@ -49,7 +49,7 @@ your_project/
 ### Import and Build Model
 
 ```python
-from jax_model_lib import jax_vlMAP, adaptive_prior
+from adaptivelasso.skcompat import MAPAdaptiveLasso
 import numpy as np
 
 X = np.random.randn(100, 10)
@@ -59,10 +59,10 @@ y = X @ true_beta + np.random.randn(100) * 0.5
 
 lam_prior_vars = {'log_gamma': np.zeros(10)}
 
-model = jax_vlMAP(
+model = MAPAdaptiveLasso(
     X=X,
     y=y,
-    lam_prior=adaptive_prior,
+    lam_prior='adaptive',
     lam_prior_vars=lam_prior_vars,
     lik='normal',
     tau0=1.0,
@@ -80,7 +80,7 @@ y_pred = model.predictive(X).mean()
 ### Example
 
 ```python
-from jax_sklearn_adapter import MAPAdaptiveLasso
+from adaptivelasso.skcompat import MAPAdaptiveLasso
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
