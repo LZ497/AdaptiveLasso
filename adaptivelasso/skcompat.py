@@ -17,7 +17,8 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         lik='normal',
         custom_prox=None,
         custom_nll_grad=None,
-        custom_prior=None
+        custom_prior=None,
+        expand='none'  # new argument: 'none', 'intr', 'quad'
     ):
         self.tau0 = tau0
         self.max_iters = max_iters
@@ -32,6 +33,7 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.custom_prox = custom_prox
         self.custom_nll_grad = custom_nll_grad
         self.custom_prior = custom_prior
+        self.expand = expand
 
     def fit(self, X, y):
         X = np.asarray(X)
@@ -44,7 +46,24 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
             'hier': hier_prior
         }
         prior_func = prior_map[self.lam_prior]
-        
+
+        # Handle expand logic
+        expand = self.expand
+        if expand not in {'none', 'intr', 'quad'}:
+            raise ValueError("expand must be one of {'none', 'intr', 'quad'}")
+        if self.lam_prior == 'hier' and expand not in {'intr', 'quad'}:
+            print("Warning: lam_prior='hier' requires expand to be 'intr' or 'quad'. Setting expand='quad'.")
+            expand = 'quad'
+
+        intr = (expand == 'intr')
+        quad = (expand == 'quad')
+
+        # Group prior: require groups to be set
+        if self.lam_prior == 'group':
+            if self.lam_prior_vars is None or 'groups' not in self.lam_prior_vars:
+                raise ValueError("For lam_prior='group', you must provide 'groups' in lam_prior_vars.")
+
+        # Set lam_prior_vars defaults if needed (except for group, which must be provided)
         if self.lam_prior_vars is None:
             if self.lam_prior == 'group':
                 G = int(np.ceil(np.sqrt(P)))  # P must be known here
@@ -84,7 +103,9 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
             track=self.track,
             custom_prox=self.custom_prox,
             custom_nll_grad=self.custom_nll_grad,
-            custom_prior=self.custom_prior
+            custom_prior=self.custom_prior,
+            intr=intr,
+            quad=quad
         )
         self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=False)
         return self
