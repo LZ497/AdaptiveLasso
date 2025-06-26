@@ -71,6 +71,8 @@ model = MAPAdaptiveLasso(
 
 model.fit(max_iters=300, lr_pre=0.01)
 y_pred = model.predictive(X).mean()
+# Retrieve fitted coefficients
+beta = model.get_coefficients()
 ```
 
 ---
@@ -92,6 +94,8 @@ pipe = Pipeline([
 pipe.fit(X, y)
 y_pred = pipe.predict(X)
 r2 = pipe.score(X, y)
+# Retrieve fitted coefficients
+beta = pipe.named_steps['jax_model'].get_coefficients()
 ```
 
 > **Note:** For heavy-tailed likelihoods like `'cauchy'`, use `RobustScaler` instead of `StandardScaler` for better stability.
@@ -151,6 +155,26 @@ Features are uniformly assigned to groups via `groups = np.repeat(np.arange(G), 
 | `plot_cost()` | Method to visualize training objective over iterations (if `track=True`). |
 | `plot()`      | Saves full diagnostic plots including final beta bar chart (if `track=True`). |
 
+---
+
+## Methods
+
+### `fit(X, y)`
+Fits the model to the data.
+
+### `predict(X)`
+Predicts the mean response for input features `X` (compatible with scikit-learn pipelines).
+
+### `score(X, y)`
+Returns the R² score of the model on the given data.
+
+### `get_coefficients()`
+Returns the fitted regression coefficients as a NumPy array.
+
+### `predictive(X)`
+Returns the predictive distribution (TensorFlow Probability distribution object) for input features `X`. For most users, use `predict(X)` for point predictions.
+
+---
 
 ## Visualization
 
