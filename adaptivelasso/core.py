@@ -385,7 +385,7 @@ class jax_vlMAP:
         new_vv['lam'] = jnp.where(ss['lam'] > 0, new_lam, new_vv['lam'])
         return new_vv
     
-    def fit(self, max_iters = 300, lr_pre=1e-2, verbose = True, debug = np.inf, hoardlarge = False, ada = False, warm_up = False, limit_lam_ss = False, prefit = False):
+    def fit(self, max_iters=300, lr_pre=1e-2, verbose=True, debug=np.inf, hoardlarge=False, ada=False, warm_up=False, limit_lam_ss=False, prefit=False, tol=1e-4):
 
         if ada:
             lr = lr_pre
@@ -497,6 +497,12 @@ class jax_vlMAP:
                 import IPython; IPython.embed()
                 break
 
+            if i > 0 and abs(self.costs[i] - self.costs[i-1]) < tol:
+                if verbose:
+                    print(f"Converged at iteration {i} (|cost change| < tol={tol})")
+                self.last_it = i
+                break
+
             #sd = get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, self.mb_size, self.N)
             if self.is_stochastic and self.vv0 is not None and g0 is not None:
                 sd = self.compute_grad_svrg(Xs_use, ys, grad_prior)
@@ -536,7 +542,6 @@ class jax_vlMAP:
                 else:
                     self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], min_var)
             self.last_it = i
-
 
         self.beta = self.vv['beta']
 
