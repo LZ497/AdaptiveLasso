@@ -1,7 +1,9 @@
 import numpy as np
 from scipy.special import expit
-from sklearn.metrics import r2_score, mean_squared_error
-
+from sklearn.metrics import (
+        mean_squared_error, r2_score, accuracy_score,
+        roc_auc_score, log_loss, f1_score
+    )
 
 def random_sparsity(P, Pnz):
     """Return a binary mask of length P with Pnz nonzeros at random positions."""
@@ -79,7 +81,34 @@ def generate_data(
     return X, y # Could consider return beta_used (the true coefficient vector used to generate the data) 
 
 def report_model_results(model, X_test, y_test, lik):
-    # Estimated coefficients
+    """
+    Evaluate and report model performance based on the specified likelihood type.
+
+    Parameters
+    ----------
+    model : object
+        Fitted model with either `predict()` or `predict_proba()` method,
+        and optionally `coef_` or `get_coefficients()` for inspecting estimated coefficients.
+
+    X_test : array-like
+        Test feature matrix.
+
+    y_test : array-like
+        Ground truth target values.
+
+    lik : str
+        Likelihood type used during model training. Supported values:
+        - 'normal'    : regression
+        - 'bernoulli' : binary classification
+        - 'cauchy'    : robust regression
+        - 'zinb'      : zero-inflated count regression
+
+    Returns
+    -------
+    None
+        Prints evaluation metrics to stdout.
+    """
+    # Coefficients
     if hasattr(model, 'coef_'):
         est_coefs = model.coef_
     elif hasattr(model, 'get_coefficients'):
@@ -91,19 +120,48 @@ def report_model_results(model, X_test, y_test, lik):
     # Predictions
     y_pred = model.predict(X_test)
 
-    # R² and RMSE
-    r2 = r2_score(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    print(f"R²: {r2:.4f}")
-    print(f"RMSE: {rmse:.4f}")
-
-    # Distribution-specific parameters
     if lik == 'normal':
+        rmse = mean_squared_error(y_test, y_pred, squared=False)
+        r2 = r2_score(y_test, y_pred)
+        mae = np.mean(np.abs(y_test - y_pred))
+        print(f"RMSE: {rmse:.4f}")
+        print(f"R²: {r2:.4f}")
+        print(f"MAE: {mae:.4f}")
         error = y_test - y_pred
         print("Estimated error variance:", np.var(error))
+
+    elif lik == 'bernoulli':
+        if hasattr(model, "predict_proba"):
+            y_prob = model.predict_proba(X_test)[:, 1]
+        else:
+            y_prob = y_pred
+        y_label = (y_prob > 0.5).astype(int)
+        acc = accuracy_score(y_test, y_label)
+        auc = roc_auc_score(y_test, y_prob)
+        logloss = log_loss(y_test, y_prob)
+        f1 = f1_score(y_test, y_label)
+        print(f"Accuracy: {acc:.4f}")
+        print(f"AUC: {auc:.4f}")
+        print(f"LogLoss: {logloss:.4f}")
+        print(f"F1 Score: {f1:.4f}")
+
     elif lik == 'cauchy':
         error = y_test - y_pred
-        print("Estimated error MAD:", np.median(np.abs(error - np.median(error))))
+        mad = np.median(np.abs(error - np.median(error)))
+        print(f"MAD: {mad:.4f}")
+
     elif lik == 'zinb':
         percent_zeros = np.mean(y_pred == 0)
-        print("Percent zeros in predictions:", percent_zeros)
+        print(f"Percent zeros in predictions: {percent_zeros:.2%}")
+    
+    elif lik in ['poisson', 'nb']:
+        rmse = mean_squared_error(y_test, y_pred, squared=False)
+        mae = np.mean(np.abs(y_test - y_pred))
+        mean_true = np.mean(y_test)
+        var_true = np.var(y_test)
+        dispersion = var_true / mean_true if mean_true > 0 else np.nan
+        print(f"RMSE: {rmse:.4f}")
+        print(f"MAE: {mae:.4f}")
+        print(f"Mean of y: {mean_true:.2f}")
+        print(f"Variance of y: {var_true:.2f}")
+        print(f"Dispersion (Var/Mean): {dispersion:.2f}")

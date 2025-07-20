@@ -16,7 +16,7 @@ See `compare_loss_adaptiveLoss.ipynb` for examples and test cases.
 
 `adaptivelasso` is a sparse Bayesian regression library implemented in JAX with support for adaptive and hierarchical priors. It includes an `skcompat`-compatible wrapper for integration into standard machine learning pipelines.
 
----
+
 
 ## Installation
 
@@ -28,7 +28,7 @@ See `compare_loss_adaptiveLoss.ipynb` for examples and test cases.
 pip install -r requirements.txt
 ```
 
----
+
 
 ## Directory Structure
 
@@ -42,7 +42,7 @@ your_project/
 ├── your_script.py
 ```
 
----
+
 
 ## Basic Usage
 
@@ -75,7 +75,6 @@ y_pred = model.predictive(X).mean()
 beta = model.get_coefficients()
 ```
 
----
 
 ## Scikit-Learn Pipeline Integration
 
@@ -100,7 +99,25 @@ beta = pipe.named_steps['jax_model'].get_coefficients()
 
 > **Note:** For heavy-tailed likelihoods like `'cauchy'`, use `RobustScaler` instead of `StandardScaler` for better stability.
 
----
+## Model Evaluation
+
+To evaluate model performance on a test set, use the utility function `report_model_results`:
+
+```python
+from adaptivelasso.utils import report_model_results
+report_model_results(model, X_test, y_test, lik='normal')
+```
+
+### Output by Likelihood Type:
+
+* `lik='normal'`: prints RMSE, R², MAE, and estimated error variance
+* `lik='bernoulli'`: prints Accuracy, AUC, LogLoss, F1 Score
+* `lik='poisson'` / `lik='nb'`: prints RMSE, MAE, mean, variance, and dispersion (Var/Mean)
+* `lik='cauchy'`: prints MAD (Median Absolute Deviation)
+* `lik='zinb'`: prints proportion of predicted zeros
+
+The function automatically selects relevant metrics based on the modeling likelihood.
+
 
 ## Parameters
 
@@ -152,7 +169,7 @@ beta = pipe.named_steps['jax_model'].get_coefficients()
 > - `'quad'`: Adds interaction and quadratic terms  
 > If `lam_prior='hier'`, only `'intr'` or `'quad'` are allowed. If not set, defaults to `'quad'` with a warning.
 
----
+
 
 ## Methods
 
@@ -163,7 +180,7 @@ beta = pipe.named_steps['jax_model'].get_coefficients()
 - `plot_cost()`: Visualize training objective over iterations (if `track=True`).
 - `plot()`: Save full diagnostic plots including final beta bar chart (if `track=True`).
 
----
+
 
 ## Attributes
 
@@ -173,7 +190,7 @@ beta = pipe.named_steps['jax_model'].get_coefficients()
 | `beta`        | Fitted regression coefficients. |
 | `costs`       | List of objective function values over iterations (if `track=True`). |
 
----
+
 
 ## Cross-Validation and Grid Search
 
@@ -185,7 +202,7 @@ beta = pipe.named_steps['jax_model'].get_coefficients()
     best_params, best_score, all_results, best_model = grid_search_adaptivelasso(X, y, param_grid, n_splits=5)
     ```
 
----
+
 
 ## Visualization
 
@@ -219,14 +236,13 @@ This improves convergence, especially in settings with high-variance stochastic 
 - For Apple Silicon (M1/M2), use `tensorflow-macos==2.12.0` and `tensorflow-metal==0.7.0` with `tensorflow-probability==0.20.1`.
 - All computation is done via JAX; training is gradient-based MAP optimization with sparsity-inducing priors.
 
----
 
 ## Data Generation
 
 - Use `generate_data` from [adaptivelasso.utils](http://_vscodecontentref_/3) to create synthetic datasets for all supported likelihoods (`'normal'`, `'cauchy'`, `'bernoulli'`, `'poisson'`, `'zinb'`, `'nb'`).
 - Returns [X, y, beta](http://_vscodecontentref_/4) (where [beta](http://_vscodecontentref_/5) is the true coefficient vector).
 
----
+
 
 ## Requirements
 
