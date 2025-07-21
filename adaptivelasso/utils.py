@@ -5,6 +5,7 @@ from sklearn.metrics import r2_score, mean_squared_error
 
 def random_sparsity(P, Pnz):
     """Return a binary mask of length P with Pnz nonzeros at random positions."""
+    Pnz = int(np.asarray(Pnz).item())  # Ensure integer
     mask = np.zeros(P)
     mask[:Pnz] = 1
     np.random.shuffle(mask)
@@ -18,7 +19,12 @@ def generate_data(
     # --- Sparsity pattern ---
     if sparsity_type == 'random':
         if Pnz is None:
-            Pnz = max(1, P // 5)
+            if beta is not None:
+                # If beta is provided, use its nonzero count as Pnz
+                Pnz = np.count_nonzero(beta)
+            else:
+                Pnz = max(1, P // 5)
+        Pnz = int(Pnz)  # Ensure integer
         nonzero = random_sparsity(P, Pnz)
         X = rng.normal(size=(N, P))
     else:
@@ -97,13 +103,32 @@ def report_model_results(model, X_test, y_test, lik):
     print(f"R²: {r2:.4f}")
     print(f"RMSE: {rmse:.4f}")
 
-    # Distribution-specific parameters
+    # Distribution-specific reporting
+    error = y_test - y_pred
     if lik == 'normal':
-        error = y_test - y_pred
+        mad = None
         print("Estimated error variance:", np.var(error))
     elif lik == 'cauchy':
-        error = y_test - y_pred
-        print("Estimated error MAD:", np.median(np.abs(error - np.median(error))))
+        mad = np.median(np.abs(error - np.median(error)))
+        print("Estimated error MAD:", mad)
     elif lik == 'zinb':
+        mad = None
         percent_zeros = np.mean(y_pred == 0)
         print("Percent zeros in predictions:", percent_zeros)
+    elif lik == 'bernoulli':
+        mad = None
+        acc = np.mean((y_pred > 0.5) == y_test)
+        print(f"Classification accuracy: {acc:.4f}")
+    elif lik == 'poisson':
+        mad = None
+        print(f"Mean predicted count: {np.mean(y_pred):.4f}")
+    elif lik == 'nb':
+        mad = None
+        print(f"Mean predicted count: {np.mean(y_pred):.4f}")
+
+    return {
+        'coefs': est_coefs,
+        'R2': r2,
+        'RMSE': rmse,
+        'MAD': mad
+    }
