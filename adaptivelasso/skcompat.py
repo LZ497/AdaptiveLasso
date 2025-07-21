@@ -246,3 +246,56 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random
     ])
     best_model.fit(X, y)
     return best_params, best_score, all_results, best_model
+
+
+class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
+    """
+    Cross-validated MAPAdaptiveLasso with grid search over hyperparameters.
+    """
+    def __init__(
+        self,
+        param_grid=None,
+        n_splits=5,
+        scoring='r2',
+        random_state=42,
+        verbose=True
+    ):
+        self.param_grid = param_grid
+        self.n_splits = n_splits
+        self.scoring = scoring
+        self.random_state = random_state
+        self.verbose = verbose
+        self.best_params_ = None
+        self.best_score_ = None
+        self.all_results_ = None
+        self.best_model_ = None
+
+    def fit(self, X, y):
+        if self.param_grid is None:
+            raise ValueError("param_grid must be specified for MAPAdaptiveLassoCV.")
+        results = grid_search_adaptivelasso(
+            X, y,
+            param_grid=self.param_grid,
+            n_splits=self.n_splits,
+            scoring=self.scoring,
+            random_state=self.random_state,
+            verbose=self.verbose
+        )
+        self.best_params_, self.best_score_, self.all_results_, self.best_model_ = results
+        return self
+
+    def predict(self, X):
+        if self.best_model_ is None:
+            raise RuntimeError("You must fit the model before predicting.")
+        return self.best_model_.predict(X)
+
+    def score(self, X, y):
+        if self.best_model_ is None:
+            raise RuntimeError("You must fit the model before scoring.")
+        return self.best_model_.score(X, y)
+
+    def get_coefficients(self):
+        if self.best_model_ is None:
+            raise RuntimeError("You must fit the model before getting coefficients.")
+        # Assumes the last step is 'alasso'
+        return self.best_model_.named_steps['alasso'].get_coefficients()
