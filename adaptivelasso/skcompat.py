@@ -184,39 +184,27 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
 
 
 def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random_state=42, verbose=True):
-    """
-    Grid search cross-validation for MAPAdaptiveLasso.
-    
-    Parameters:
-        X, y: data
-        param_grid: dict, e.g. {'tau0': [0.1, 1.0], 'lr_pre': [0.01, 0.1]}
-        n_splits: int, number of CV folds
-        scoring: str, one of ['r2', 'neg_rmse', 'roc_auc', 'neg_log_loss', 'f1']
-        random_state: int
-        verbose: bool
-    Returns:
-        best_params: dict of best parameters
-        best_score: float
-        all_results: list of dicts for each param set
-        best_model: fitted MAPAdaptiveLasso instance
-    """
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     grid = list(ParameterGrid(param_grid))
     all_results = []
 
     # Initialize best_score
-    if scoring in ['r2', 'f1', 'roc_auc']:
+    maximize_metrics = ['r2', 'roc_auc', 'f1']
+    minimize_metrics = ['neg_rmse', 'neg_log_loss', 'neg_log_likelihood']
+    if scoring in maximize_metrics:
         best_score = -np.inf
-    else:  # neg_rmse, neg_log_loss
+    elif scoring in minimize_metrics:
         best_score = np.inf
+    else:
+        raise ValueError(f"Unsupported scoring metric: {scoring}")
 
-    best_params = None
-    best_model = None
+    best_params, best_model = None, None
 
     for params in grid:
         fold_scores = []
         if verbose:
             print(f"Testing params: {params}")
+        lik = params.get('lik', 'normal')
 
         for train_idx, val_idx in kf.split(X):
             X_train, X_val = X[train_idx], X[val_idx]
@@ -228,52 +216,60 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random
             ])
             pipe.fit(X_train, y_train)
 
-            # Predictions
             y_pred = pipe.predict(X_val)
 
-            # For classification metrics, need probabilities
+            # For classification metrics (bernoulli), compute probabilities
             y_pred_prob = None
-            if params.get('lik', 'normal') == 'bernoulli':
+            if lik == 'bernoulli':
                 beta = pipe.named_steps['alasso'].get_coefficients()
-                intercept = 0.0  # If you have an intercept in MAPAdaptiveLasso, adjust here
+                intercept = 0.0
                 linear_term = X_val @ beta + intercept
-                prob = 1 / (1 + np.exp(-linear_term))
-                y_pred_prob = prob
+                y_pred_prob = 1 / (1 + np.exp(-linear_term))
 
             # Compute score
             if scoring == 'r2':
-                score = r2_score(y_val, y_pred)
+                if lik in ['normal', 'cauchy', 'poisson', 'nb', 'zinb']:
+                    score = r2_score(y_val, y_pred)
+                else:
+                    raise ValueError("r2 not applicable for classification")
             elif scoring == 'neg_rmse':
                 score = -mean_squared_error(y_val, y_pred, squared=False)
             elif scoring == 'roc_auc':
-                if y_pred_prob is None:
-                    raise ValueError("roc_auc requires lik='bernoulli'")
+                if lik != 'bernoulli':
+                    raise ValueError("roc_auc only for bernoulli likelihood")
                 score = roc_auc_score(y_val, y_pred_prob)
             elif scoring == 'neg_log_loss':
-                if y_pred_prob is None:
-                    raise ValueError("neg_log_loss requires lik='bernoulli'")
+                if lik != 'bernoulli':
+                    raise ValueError("neg_log_loss only for bernoulli likelihood")
                 score = -log_loss(y_val, y_pred_prob)
             elif scoring == 'f1':
-                if y_pred_prob is None:
-                    raise ValueError("f1 requires lik='bernoulli'")
+                if lik != 'bernoulli':
+                    raise ValueError("f1 only for bernoulli likelihood")
                 y_pred_label = (y_pred_prob >= 0.5).astype(int)
                 score = f1_score(y_val, y_pred_label)
+            elif scoring == 'neg_log_likelihood':
+                if lik in ['poisson', 'nb', 'zinb']:
+                    eps = 1e-8
+                    mu = y_pred + eps
+                    ll = np.sum(y_val * np.log(mu) - mu)  # Simplified NB/Poisson log-likelihood
+                    score = -ll / len(y_val)
+                else:
+                    raise ValueError("neg_log_likelihood only for poisson, nb, zinb")
             else:
                 raise ValueError(f"Unsupported scoring metric: {scoring}")
 
             fold_scores.append(score)
 
         mean_score = np.mean(fold_scores)
-        result = {**params, 'mean_score': mean_score, 'std_score': np.std(fold_scores)}
-        all_results.append(result)
+        all_results.append({**params, 'mean_score': mean_score})
 
         # Update best model
-        if ((scoring in ['r2', 'f1', 'roc_auc'] and mean_score > best_score) or
-            (scoring in ['neg_rmse', 'neg_log_loss'] and mean_score < best_score)):
+        if ((scoring in maximize_metrics and mean_score > best_score) or
+            (scoring in minimize_metrics and mean_score < best_score)):
             best_score = mean_score
             best_params = params
 
-    # Fit best model on all data
+    # Fit best model on full data
     best_model = Pipeline([
         ('scale', StandardScaler()),
         ('alasso', MAPAdaptiveLasso(**best_params))
@@ -281,6 +277,7 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random
     best_model.fit(X, y)
 
     return best_params, best_score, all_results, best_model
+
 
 
 class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
