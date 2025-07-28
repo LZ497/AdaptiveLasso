@@ -221,6 +221,9 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random
             ])
             pipe.fit(X_train, y_train)
             y_pred = pipe.predict(X_val)
+            if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)) or np.any(np.abs(y_pred) > 1e10):
+                print("Invalid predictions for params:", params)
+                continue  # Skip this parameter set
             r2 = pipe.score(X_val, y_val)
             rmse = np.sqrt(mean_squared_error(y_val, y_pred))
             scores.append(r2)

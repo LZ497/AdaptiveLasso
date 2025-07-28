@@ -494,7 +494,7 @@ class jax_vlMAP:
             # print(f"Iteration {i}, Cost: {self.costs[i]}, NLL: {cost_nll}, Prior: {cost_prior}")
             if not np.isfinite(self.costs[i]):
                 print("Infinite cost!")
-                import IPython; IPython.embed()
+                # import IPython; IPython.embed()
                 break
 
             if i > 0 and abs(self.costs[i] - self.costs[i-1]) < tol:
