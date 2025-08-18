@@ -49,7 +49,6 @@ def get_sd(grad, ss):
         sd[v] = -grad[v]*ss[v]
     return(sd)
 
-
 class jax_vlMAP:
     auto_N_sg = 5000
 
@@ -219,8 +218,6 @@ class jax_vlMAP:
             if sigma2 < min_var:
                 print(f"Variance too small ({sigma2}), setting to {min_var}")
                 sigma2 = jnp.array(min_var)
-            if self.sigma2_exp:
-                sigma2 = jnp.log(jnp.maximum(sigma2, min_var))
             if not jnp.isfinite(sigma2) or sigma2 <= 0:
                 print("Non-finite or non-positive sigma2 in reset_vars:", sigma2)
                 sigma2 = jnp.array(1.0)
@@ -324,7 +321,7 @@ class jax_vlMAP:
             return prior_smooth, npd_ns
 
         def adam_update_ss_nojit(v_adam, vhat_adam, grad, vv, it):
-                #grad = gradlike
+            print("Is it grad or sd?")
             for v in v_adam:
                 v_adam[v] = self.beta_adam*v_adam[v] + (1-self.beta_adam)*jnp.square(grad[v])
 
@@ -413,10 +410,10 @@ class jax_vlMAP:
         track_smol = ['beta','lam']+list(self.lam_prior_vars.keys())
         if self.track:
             for v in self.vv:
-                    if (self.quad or self.intr) and v in track_smol:
-                        self.tracking[v] = np.zeros((max_iters,self.Pu))
-                    else:
-                        self.tracking[v] = np.zeros((max_iters,)+self.vv[v].shape)
+                if (self.quad or self.intr) and v in track_smol:
+                    self.tracking[v] = np.zeros((max_iters,self.Pu))
+                else:
+                    self.tracking[v] = np.zeros((max_iters,)+self.vv[v].shape)
 
         for i in tqdm(range(max_iters), disable = not verbose, smoothing = 0.):
             
@@ -441,6 +438,7 @@ class jax_vlMAP:
                     print("ES stop!")
                     break
 
+            # Is this still needed with the snapshot_update block above?
             if i % self.svrg_every==0:
                 g0 = dict([(v, np.zeros_like(self.vv[v])) for v in self.vv])
 
@@ -509,7 +507,7 @@ class jax_vlMAP:
             else:
                 for k in grad_nll:
                     grad_nll[k] += grad_prior[k]
-                sd = grad_nll
+                sd = get_sd(grad_nll, ss_ones)
 
             if ada:
                 adam_grad = sd
@@ -526,6 +524,7 @@ class jax_vlMAP:
                 pf_vars = ['beta','lam']+list(self.lam_prior_vars.keys())
                 for v in pf_vars:
                     ss[v] *= 0
+            #import IPython; IPython.embed()
             next_vv = self.get_vv(self.vv, sd, ss, lr_use, self.tau0)
             self.vv = next_vv
             if 'sigma2' in self.vv and self.lik == 'cauchy':
@@ -607,8 +606,9 @@ class jax_vlMAP:
         return self._predictive(XX, self.vv)
 
 
-    def plot(self, fname='fit.png'):
+    def plot(self, fname=None):
         if not self.track:
+            print("did not track, so no plot available.")
             return  # no plot if nothing tracked
 
         tracked_vars = list(self.tracking.keys())
@@ -663,7 +663,11 @@ class jax_vlMAP:
         ax.set_xticklabels([str(i) for i in x], rotation=90)
 
         plt.tight_layout()
-        plt.show()
+        if fname is None:
+            plt.show()
+        else:
+            plt.savefig(fname)
+            plt.close()
 
 
 def sto(x0,lam,sx):

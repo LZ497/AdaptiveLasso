@@ -17,7 +17,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-from adaptivelasso.skcompat import MAPAdaptiveLassoCV
+from adaptivelasso.skcompat import MAPAdaptiveLassoCV, MAPAdaptiveLasso
 from adaptivelasso.utils import report_model_results
 
 def load_and_preprocess_data(data_path):
@@ -97,26 +97,24 @@ def train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=42):
     
     return alasso_cv, metrics
 
-def main():
-    """Main function to run the script."""
-    parser = argparse.ArgumentParser(description='Test MAPAdaptiveLassoCV on bike sharing dataset')
-    # Please update with your data path
-    parser.add_argument('--data_path', type=str, default='/Users/u543860/dataset_for_adaptivelasso/bike+sharing+dataset/day.csv', 
-                        help='Path to the bike sharing dataset CSV file')
-    parser.add_argument('--random_state', type=int, default=42, 
-                        help='Random state for reproducibility')
-    args = parser.parse_args()
-    
-    # Load and prepare data
-    X, y = load_and_preprocess_data(args.data_path)
-    X_train, X_test, y_train, y_test = train_test_preparation(X, y, random_state=0)
-    
-    # Train and evaluate model
-    model, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, 
-                                             random_state=args.random_state)
-    
-    print("\nScript completed successfully!")
-    return model, metrics
+data_path = './day.csv'
+# Load and prepare data
+X, y = load_and_preprocess_data(data_path)
+X_train, X_test, y_train, y_test = train_test_preparation(X, y, random_state=0)
 
-if __name__ == "__main__":
-    model, metrics = main()
+mu_X = np.mean(X_train, axis = 0)
+sig_x = np.std(X_train, axis = 0)
+X_train = (X_train - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
+X_test = (X_test - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
+
+# Train and evaluate model
+#model, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
+
+mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 2000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = -1)
+mod.fit(X_train, y_train)
+mod.model_.plot('temp.pdf')
+model = mod.model_
+np.corrcoef(mod.predict(X_train), y_train)
+np.corrcoef(mod.predict(X_test), y_test)
+np.square(np.corrcoef(mod.predict(X_test), y_test)[1,0])
+

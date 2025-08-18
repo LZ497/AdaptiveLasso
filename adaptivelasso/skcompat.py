@@ -28,6 +28,8 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         cv=None,
         random_state=None,
         tol=1e-4,
+        prog=False,
+        ada=True,
     ):
         self.tau0 = tau0
         self.max_iters = max_iters
@@ -46,6 +48,8 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.cv = cv
         self.random_state = random_state
         self.tol = tol
+        self.prog=prog
+        self.ada = ada
 
     def fit(self, X, y):
         X = np.asarray(X)
@@ -121,7 +125,7 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
                 intr=intr,
                 quad=quad
             )
-            self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=False)
+            self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=self.prog, ada = self.ada, tol=self.tol)
             return self
 
         # --- Cross-validation logic ---
