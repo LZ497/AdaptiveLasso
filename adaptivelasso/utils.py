@@ -1,6 +1,12 @@
 import numpy as np
 from scipy.special import expit
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import (
+    r2_score, mean_squared_error, mean_absolute_error,
+    explained_variance_score, accuracy_score, roc_auc_score, f1_score,
+    mean_poisson_deviance
+)
+from pprint import pprint
+
 
 
 def random_sparsity(P, Pnz):
@@ -85,50 +91,83 @@ def generate_data(
     return X, y # Could consider return beta_used (the true coefficient vector used to generate the data) 
 
 def report_model_results(model, X_test, y_test, lik):
-    # Estimated coefficients
-    if hasattr(model, 'coef_'):
-        est_coefs = model.coef_
-    elif hasattr(model, 'get_coefficients'):
-        est_coefs = model.get_coefficients()
-    else:
-        est_coefs = None
-    print("Estimated coefficients:", est_coefs)
+    """
+    Calculates, prints, and returns a dictionary of performance metrics for a given model.
+    
+    Parameters
+    ----------
+    model : scikit-learn compatible model
+        The fitted model to evaluate.
+    X_test : array-like
+        Test features.
+    y_test : array-like
+        Test target values.
+    lik : str
+        The likelihood used by the model, which determines which metrics are relevant.
+        
+    Returns
+    -------
+    dict
+        A dictionary containing calculated performance metrics.
+    """
+    metrics = {}
 
-    # Predictions
+    # Get estimated coefficients
+    if hasattr(model, 'coef_'):
+        metrics['coefs'] = model.coef_
+    elif hasattr(model, 'get_coefficients'):
+        metrics['coefs'] = model.get_coefficients()
+    else:
+        metrics['coefs'] = None
+
+    # Get model predictions
     y_pred = model.predict(X_test)
 
-    # R² and RMSE
-    r2 = r2_score(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    print(f"R²: {r2:.4f}")
-    print(f"RMSE: {rmse:.4f}")
+    # --- Calculate all relevant metrics ---
 
-    # Distribution-specific reporting
-    error = y_test - y_pred
-    if lik == 'normal':
-        mad = None
-        print("Estimated error variance:", np.var(error))
+    # For 'normal' and other regression-like likelihoods
+    try:
+        metrics['R2'] = r2_score(y_test, y_pred)
+        metrics['RMSE'] = np.sqrt(mean_squared_error(y_test, y_pred))
+        metrics['MAE'] = mean_absolute_error(y_test, y_pred)
+        metrics['explained_variance'] = explained_variance_score(y_test, y_pred)
+    except Exception:
+        metrics['R2'] = -np.inf
+        metrics['RMSE'] = np.inf
+        metrics['MAE'] = np.inf
+        metrics['explained_variance'] = -np.inf
+
+    # Likelihood-specific metrics
+    if lik == 'bernoulli':
+        try:
+            y_pred_class = (y_pred > 0.5).astype(int)
+            metrics['accuracy'] = accuracy_score(y_test, y_pred_class)
+            metrics['f1'] = f1_score(y_test, y_pred_class)
+            if len(np.unique(y_test)) > 1:
+                 metrics['AUC'] = roc_auc_score(y_test, y_pred)
+        except Exception:
+            metrics['accuracy'] = 0
+            metrics['f1'] = 0
+            metrics['AUC'] = 0
+
+    elif lik in ['poisson', 'nb', 'zinb']:
+        try:
+            y_pred_clipped = np.maximum(y_pred, 0)
+            metrics['poisson_deviance'] = mean_poisson_deviance(y_test, y_pred_clipped)
+            metrics['nb_deviance'] = metrics['poisson_deviance'] # Proxy for selection
+        except Exception:
+            metrics['poisson_deviance'] = np.inf
+            metrics['nb_deviance'] = np.inf
+    
     elif lik == 'cauchy':
-        mad = np.median(np.abs(error - np.median(error)))
-        print("Estimated error MAD:", mad)
-    elif lik == 'zinb':
-        mad = None
-        percent_zeros = np.mean(y_pred == 0)
-        print("Percent zeros in predictions:", percent_zeros)
-    elif lik == 'bernoulli':
-        mad = None
-        acc = np.mean((y_pred > 0.5) == y_test)
-        print(f"Classification accuracy: {acc:.4f}")
-    elif lik == 'poisson':
-        mad = None
-        print(f"Mean predicted count: {np.mean(y_pred):.4f}")
-    elif lik == 'nb':
-        mad = None
-        print(f"Mean predicted count: {np.mean(y_pred):.4f}")
+        error = y_test - y_pred
+        metrics['MAD'] = np.median(np.abs(error - np.median(error)))
 
-    return {
-        'coefs': est_coefs,
-        'R2': r2,
-        'RMSE': rmse,
-        'MAD': mad
-    }
+    # --- Print the results for immediate feedback ---
+    print("\n--- Model Performance Metrics ---")
+    # Exclude the large coefficient array from the printed output for clarity
+    metrics_to_print = {k: v for k, v in metrics.items() if k != 'coefs'}
+    pprint(metrics_to_print)
+    print("-----------------------------\n")
+
+    return metrics

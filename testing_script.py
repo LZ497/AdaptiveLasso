@@ -11,11 +11,11 @@ Usage:
     python testing_script.py [--data_path DATA_PATH] [--random_state RANDOM_STATE]
 """
 
-import argparse
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LassoCV
 
 from adaptivelasso.skcompat import MAPAdaptiveLassoCV, MAPAdaptiveLasso
 from adaptivelasso.utils import report_model_results
@@ -67,15 +67,15 @@ def train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=42):
     print("Creating model with parameter grid...")
     alasso_cv = MAPAdaptiveLassoCV(
         param_grid={
-            'tau0': [0.01],
-            'max_iters': [1000],
+            'tau0': np.logspace(-3, 1, 100),  # Logarithmic scale for tau0
+            'max_iters': [10000],
             'lr_pre': [0.001],
-            'mb_size': [None, 32],
-            'invlam': [True, False],
-            'logprox': [False],
+            'mb_size': [None],
+            'invlam': [False],
+            'logprox': [True],
             'lam_prior': ['adaptive'],
-            'lik': ['nb', 'normal'],
-            'expand': ['none', 'intr', 'quad'],
+            'lik': ['nb'],
+            'expand': ['none'],
             'tol': [1e-4]
         },
         n_splits=5, 
@@ -107,14 +107,38 @@ sig_x = np.std(X_train, axis = 0)
 X_train = (X_train - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
 X_test = (X_test - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
 
-# Train and evaluate model
-#model, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
+# Train and evaluate model with CV
+model, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
 
-mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 2000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = -1)
-mod.fit(X_train, y_train)
-mod.model_.plot('temp.pdf')
-model = mod.model_
-np.corrcoef(mod.predict(X_train), y_train)
-np.corrcoef(mod.predict(X_test), y_test)
-np.square(np.corrcoef(mod.predict(X_test), y_test)[1,0])
+# # Test MAPAdaptiveLasso
+# mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4)
+# mod.fit(X_train, y_train)
+# print(mod.score(X_test, y_test))
+# mod.model_.plot('temp.pdf')
+# model = mod.model_
+# np.corrcoef(mod.predict(X_train), y_train)
+# np.corrcoef(mod.predict(X_test), y_test)
+# np.square(np.corrcoef(mod.predict(X_test), y_test)[1,0])
 
+# # MAPAdaptiveLasso with scaler
+# pipe_mapa = Pipeline([
+#     ('mapa', MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4))
+# ])
+# pipe_mapa.fit(X_train, y_train)
+
+# report_model_results(pipe_mapa.named_steps['mapa'], X_test, y_test, lik='normal')
+
+# pipe_mapa_nb = Pipeline([
+#     ('mapa_nb', MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4, lik='nb'))
+# ])
+# pipe_mapa_nb.fit(X_train, y_train)
+
+# report_model_results(pipe_mapa_nb.named_steps['mapa_nb'], X_test, y_test, lik='nb')
+
+# # Use a pipeline for scaling and LassoCV
+# pipe_lassocv = Pipeline([
+#     ('lasso', LassoCV(cv=5, random_state=123, max_iter=10000, tol=1e-4))
+# ])
+# pipe_lassocv.fit(X_train, y_train)
+
+# report_model_results(pipe_lassocv.named_steps['lasso'], X_test, y_test, lik='normal')
