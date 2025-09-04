@@ -16,9 +16,11 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LassoCV
-
+from sklearn.metrics import mean_squared_error
 from adaptivelasso.skcompat import MAPAdaptiveLassoCV, MAPAdaptiveLasso
 from adaptivelasso.utils import report_model_results
+import tensorflow_probability.substrates.jax as tfp
+tfpd = tfp.distributions
 
 def load_and_preprocess_data(data_path):
     """Load and preprocess the bike sharing dataset."""
@@ -107,38 +109,61 @@ sig_x = np.std(X_train, axis = 0)
 X_train = (X_train - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
 X_test = (X_test - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
 
-# Train and evaluate model with CV
-model, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
+# # Train and evaluate model with CV
+# modelCV, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
 
-# # Test MAPAdaptiveLasso
-# mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4)
-# mod.fit(X_train, y_train)
-# print(mod.score(X_test, y_test))
-# mod.model_.plot('temp.pdf')
-# model = mod.model_
-# np.corrcoef(mod.predict(X_train), y_train)
-# np.corrcoef(mod.predict(X_test), y_test)
-# np.square(np.corrcoef(mod.predict(X_test), y_test)[1,0])
+# Test MAPAdaptiveLasso
+# mod = MAPAdaptiveLasso(tau0=np.float64(1.5556761439304723), track = True, max_iters = 10000, lr_pre = 0.001, mb_size = None, random_state=123, prog=True, tol = 1e-4, lik='nb')
+mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4, lik='nb', cv=5)
+mod.fit(X_train, y_train)
+print(mod.score(X_test, y_test))
+mod.model_.plot('temp.pdf')
+model = mod.model_
+np.corrcoef(mod.predict(X_train), y_train)
+np.corrcoef(mod.predict(X_test), y_test)
+np.square(np.corrcoef(mod.predict(X_test), y_test)[1,0])
 
-# # MAPAdaptiveLasso with scaler
-# pipe_mapa = Pipeline([
-#     ('mapa', MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4))
-# ])
-# pipe_mapa.fit(X_train, y_train)
 
-# report_model_results(pipe_mapa.named_steps['mapa'], X_test, y_test, lik='normal')
+def compare_models_on_log_likelihood(mapa_model, lasso_model, X_train, y_train, X_test, y_test):
+    """
+    Compares two models based on their total log predictive density on the test set.
 
-# pipe_mapa_nb = Pipeline([
-#     ('mapa_nb', MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4, lik='nb'))
-# ])
-# pipe_mapa_nb.fit(X_train, y_train)
+    This is a principled way to compare models with different likelihood assumptions.
+    """
+    print("\n--- Comparing Models on Log Predictive Density ---")
 
-# report_model_results(pipe_mapa_nb.named_steps['mapa_nb'], X_test, y_test, lik='nb')
+    # 1. Get predictive distribution for the MAPAdaptiveLasso model
+    # This uses the internal _predictive method
+    dist_pred_nb = mapa_model.model_._predictive(X_test, mapa_model.model_.vv)
+    log_lik = np.sum(dist_pred_nb.log_prob(y_test))
+    print(f"MAPAdaptiveLasso Total Log-Likelihood: {log_lik:.2f}")
 
-# # Use a pipeline for scaling and LassoCV
-# pipe_lassocv = Pipeline([
-#     ('lasso', LassoCV(cv=5, random_state=123, max_iter=10000, tol=1e-4))
-# ])
-# pipe_lassocv.fit(X_train, y_train)
+    # 2. Manually construct the predictive distribution for the LassoCV (Normal) model
+    # The mean is the standard prediction
+    preds_lasso = lasso_model.predict(X_test)
+    # The scale (std dev) is the RMSE calculated on the TRAINING data
+    rmse_train_lasso = np.sqrt(mean_squared_error(y_train, lasso_model.predict(X_train)))
+    dist_pred_lasso = tfpd.Normal(loc=preds_lasso, scale=rmse_train_lasso)
+    log_lik_lasso = np.sum(dist_pred_lasso.log_prob(y_test))
+    print(f"LassoCV (Normal) Total Log-Likelihood: {log_lik_lasso:.2f}")
 
-# report_model_results(pipe_lassocv.named_steps['lasso'], X_test, y_test, lik='normal')
+    if log_lik > log_lik_lasso:
+        print("\nConclusion: The MAPAdaptiveLasso model is a better fit for this data.")
+    else:
+        print("\nConclusion: The LassoCV (Normal) model is a better fit for this data.")
+        
+# --- Train standard LassoCV ---
+print("\n--- Training Standard LassoCV ---")
+lasso_cv = LassoCV(cv=5, random_state=123, max_iter=10000, tol=1e-4)
+# Use scaled X and ORIGINAL y
+lasso_cv.fit(X_train, y_train)
+
+# --- Compare the two models using the new function ---
+compare_models_on_log_likelihood(
+    mapa_model=mod,
+    lasso_model=lasso_cv,
+    X_train=X_train,
+    y_train=y_train,
+    X_test=X_test,
+    y_test=y_test
+)
