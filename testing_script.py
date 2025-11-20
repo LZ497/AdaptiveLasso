@@ -112,9 +112,20 @@ X_test = (X_test - mu_X[np.newaxis,:]) / (1e-6+sig_x[np.newaxis,:])
 # # Train and evaluate model with CV
 # modelCV, metrics = train_and_evaluate_model(X_train, X_test, y_train, y_test, random_state=123)
 
-# Test MAPAdaptiveLasso
-# mod = MAPAdaptiveLasso(tau0=np.float64(1.5556761439304723), track = True, max_iters = 10000, lr_pre = 0.001, mb_size = None, random_state=123, prog=True, tol = 1e-4, lik='nb')
-mod = MAPAdaptiveLasso(tau0=1e-1, track = True, max_iters = 10000, lr_pre = 1e0, mb_size = 50, random_state=123, ada=True, prog=True, tol = 1e-4, lik='nb', cv=5)
+# Best MAPAdaptiveLasso
+best_mapa_params = {
+    'tau0': 0.01, 
+    'max_iters': 1000, 
+    'lr_pre': 0.001, 
+    'mb_size': 32, 
+    'invlam': False, 
+    'logprox': False, 
+    'lam_prior': 'adaptive', 
+    'lik': 'nb', 
+    'expand': 'none', 
+    'tol': 0.0001
+}
+mod = MAPAdaptiveLasso(**best_mapa_params, random_state=123)
 mod.fit(X_train, y_train)
 print(mod.score(X_test, y_test))
 mod.model_.plot('temp.pdf')
