@@ -5,6 +5,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error
 from adaptivelasso import jax_vlMAP, adaptive_prior, group_prior, hier_prior
+from joblib import Parallel, delayed
+from adaptivelasso.utils import report_model_results
+from pprint import pprint
 
 class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
     def __init__(
@@ -26,6 +29,8 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         cv=None,
         random_state=None,
         tol=1e-4,
+        prog=False,
+        ada=True,
     ):
         self.tau0 = tau0
         self.max_iters = max_iters
@@ -44,6 +49,8 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.cv = cv
         self.random_state = random_state
         self.tol = tol
+        self.prog=prog
+        self.ada = ada
 
     def fit(self, X, y):
         X = np.asarray(X)
@@ -119,7 +126,7 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
                 intr=intr,
                 quad=quad
             )
-            self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=False)
+            self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=self.prog, ada = self.ada, tol=self.tol)
             return self
 
         # --- Cross-validation logic ---
@@ -183,80 +190,173 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         return np.array(self.model_.beta)
 
 
-def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring='r2', random_state=42, verbose=True):
+def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring=None, random_state=42, verbose=True):
     """
-    Grid search cross-validation for MAPAdaptiveLasso.
+    Grid search for MAPAdaptiveLasso with appropriate metrics for different likelihoods.
     
-    Parameters:
-        X, y: data
-        param_grid: dict, e.g. {'tau0': [0.1, 1.0], 'lr_pre': [0.01, 0.1]}
-        n_splits: int, number of CV folds
-        scoring: 'r2' or 'neg_rmse'
-        random_state: int
-        verbose: bool
-    Returns:
-        best_params: dict of best parameters
-        best_score: float
-        all_results: list of dicts for each param set
-        best_model: fitted MAPAdaptiveLasso instance
+    Parameters
+    ----------
+    X : array-like
+        Features matrix
+    y : array-like
+        Target vector
+    param_grid : dict
+        Grid of parameters to search
+    n_splits : int, default=5
+        Number of cross-validation folds
+    scoring : str or None, default=None
+        Scoring metric to use. If None, will be auto-selected based on likelihood.
+    random_state : int, default=42
+        Random seed for reproducibility
+    verbose : bool, default=True
+        Whether to print progress messages
+        
+    Returns
+    -------
+    tuple
+        (best_params, best_score, all_results, best_model)
     """
+    # Auto-determine scoring based on the first likelihood in the grid if not provided
+    first_lik = param_grid.get('lik', ['normal'])[0]
+    
+    if scoring is None:
+        if first_lik == 'normal':
+            scoring = 'r2'
+        elif first_lik == 'bernoulli':
+            scoring = 'acc'
+        elif first_lik in ['poisson', 'nb', 'zinb']:
+            scoring = 'neg_rmse'
+        else:
+            scoring = 'r2'  # Fallback for other likelihoods
+
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     grid = list(ParameterGrid(param_grid))
-    all_results = []
-    best_score = -np.inf if scoring == 'r2' else np.inf
-    best_params = None
-    best_model = None
 
-    for params in grid:
-        scores = []
-        rmses = []
+    def evaluate_params(params):
+        metrics_list = []
         if verbose:
             print(f"Testing params: {params}")
-        for train_idx, val_idx in kf.split(X):
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            pipe = Pipeline([
-                ('scale', StandardScaler()),
-                ('alasso', MAPAdaptiveLasso(**params))
-            ])
-            pipe.fit(X_train, y_train)
-            y_pred = pipe.predict(X_val)
-            r2 = pipe.score(X_val, y_val)
-            rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-            scores.append(r2)
-            rmses.append(rmse)
-        mean_score = np.mean(scores)
-        mean_rmse = np.mean(rmses)
-        result = {
-            **params,
-            'mean_r2': mean_score,
-            'std_r2': np.std(scores),
-            'mean_rmse': mean_rmse,
-            'std_rmse': np.std(rmses)
-        }
-        all_results.append(result)
-        if (scoring == 'r2' and mean_score > best_score) or (scoring == 'neg_rmse' and mean_rmse < best_score):
-            best_score = mean_score if scoring == 'r2' else mean_rmse
-            best_params = params
+        
+        try:
+            current_lik = params.get('lik', 'normal')
+            
+            for train_idx, val_idx in kf.split(X):
+                if hasattr(X, "iloc"):
+                    X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
+                    y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
+                else:
+                    X_train_cv, X_val_cv = X[train_idx], X[val_idx]
+                    y_train_cv, y_val_cv = y[train_idx], y[val_idx]
+                
+                model = MAPAdaptiveLasso(**params)
+                model.fit(X_train_cv, y_train_cv)
+                
+                metrics = report_model_results(model, X_val_cv, y_val_cv, lik=current_lik)
+                metrics_list.append(metrics)
+                
+            if not metrics_list:
+                return None
+            
+            # Calculate mean of all available metrics for reporting
+            mean_metrics = {
+                'mean_r2': np.mean([m.get('R2', -np.inf) for m in metrics_list]),
+                'mean_rmse': np.mean([m.get('RMSE', np.inf) for m in metrics_list]),
+                'mean_mae': np.mean([m.get('MAE', np.inf) for m in metrics_list]),
+                'mean_explained_variance': np.mean([m.get('explained_variance', -np.inf) for m in metrics_list]),
+                'mean_accuracy': np.mean([m.get('accuracy', 0) for m in metrics_list]),
+                'mean_auc': np.mean([m.get('AUC', 0) for m in metrics_list]),
+                'mean_f1': np.mean([m.get('F1', 0) for m in metrics_list]),
+                'mean_poisson_deviance': np.mean([m.get('poisson_deviance', np.inf) for m in metrics_list]),
+                'mean_nb_deviance': np.mean([m.get('nb_deviance', np.inf) for m in metrics_list]),
+            }
+            
+            return {**params, **mean_metrics}
 
-    # Fit best model on all data
-    best_model = Pipeline([
-        ('scale', StandardScaler()),
-        ('alasso', MAPAdaptiveLasso(**best_params))
-    ])
-    best_model.fit(X, y)
+        except Exception as e:
+            if verbose:
+                print(f"Error with params {params}: {str(e)}")
+            return None
+
+    results = Parallel(n_jobs=-1)(delayed(evaluate_params)(params) for params in grid)
+    all_results = [r for r in results if r is not None]
+    
+    if not all_results:
+        raise ValueError("All parameter combinations failed! Check model parameters and data.")
+
+    # Define the primary metric for model selection based on the `scoring` parameter
+    selection_metrics = {
+        'r2': ('mean_r2', True),
+        'neg_rmse': ('mean_rmse', False),
+        'acc': ('mean_accuracy', True),
+        'neg_mae': ('mean_mae', False),
+        'f1': ('mean_f1', True),
+        'auc': ('mean_auc', True),
+        'neg_poisson_deviance': ('mean_poisson_deviance', False),
+        'neg_nb_deviance': ('mean_nb_deviance', False),
+    }
+    
+    if scoring not in selection_metrics:
+        raise ValueError(f"Scoring='{scoring}' is not a supported metric.")
+        
+    main_metric, maximize = selection_metrics[scoring]
+
+    best_score = -np.inf if maximize else np.inf
+    best_params = None
+
+    for result in all_results:
+        score = result.get(main_metric)
+        if score is None:
+            continue
+        if (maximize and score > best_score) or (not maximize and score < best_score):
+            best_score = score
+            best_params = {k: result[k] for k in param_grid.keys()}
+
+    if best_params is None:
+        raise ValueError("Could not find best parameters. All combinations may have failed or produced invalid scores.")
+        
+    best_model = MAPAdaptiveLasso(**best_params)
+    
+    X_np = X.to_numpy() if hasattr(X, 'to_numpy') else X
+    y_np = y.to_numpy() if hasattr(y, 'to_numpy') else y
+    
+    best_model.fit(X_np, y_np)
+    if verbose:
+        print("\n--- Grid Search Complete ---")
+        print(f"Best model selected based on '{scoring}' score.")
+        print(f"Best Score: {best_score:.4f}")
+        print("Best Hyperparameters:")
+        pprint(best_params)
+        print("--------------------------\n")
+
     return best_params, best_score, all_results, best_model
 
 
 class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
     """
     Cross-validated MAPAdaptiveLasso with grid search over hyperparameters.
+    
+    Parameters
+    ----------
+    param_grid : dict
+        Dictionary with parameters names as keys and lists of parameter settings to try as values.
+    n_splits : int, default=5
+        Number of folds for cross-validation.
+    scoring : str or None, default=None
+        Scoring metric to use for model selection. If None, will automatically select
+        the appropriate metric based on the likelihood:
+        - 'r2' for 'normal' likelihood
+        - 'acc' for 'bernoulli' likelihood
+        - 'neg_rmse' for 'poisson', 'nb', 'zinb' likelihoods
+    random_state : int, default=42
+        Random state for K-fold cross-validation.
+    verbose : bool, default=True
+        Whether to print progress during grid search.
     """
     def __init__(
         self,
         param_grid=None,
         n_splits=5,
-        scoring='r2',
+        scoring=None,  # Changed from 'r2' to None for auto-selection
         random_state=42,
         verbose=True
     ):
@@ -273,6 +373,16 @@ class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
     def fit(self, X, y):
         if self.param_grid is None:
             raise ValueError("param_grid must be specified for MAPAdaptiveLassoCV.")
+        
+        # Forbid grid searching over multiple likelihoods in a single CV instance
+        if 'lik' in self.param_grid:
+            lik_values = self.param_grid['lik']
+            if isinstance(lik_values, (list, tuple, np.ndarray)) and len(lik_values) > 1:
+                raise ValueError(
+                    "MAPAdaptiveLassoCV does not support grid searching over multiple likelihoods ('lik'). "
+                    "Please create separate MAPAdaptiveLassoCV instances for each likelihood you wish to test."
+                )
+        
         results = grid_search_adaptivelasso(
             X, y,
             param_grid=self.param_grid,
@@ -297,5 +407,5 @@ class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
     def get_coefficients(self):
         if self.best_model_ is None:
             raise RuntimeError("You must fit the model before getting coefficients.")
-        # Assumes the last step is 'alasso'
-        return self.best_model_.named_steps['alasso'].get_coefficients()
+        # best_model_ is now directly a MAPAdaptiveLasso instance, not a pipeline
+        return self.best_model_.get_coefficients()
