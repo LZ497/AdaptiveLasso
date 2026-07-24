@@ -3,3 +3,6 @@
 *.DS_Store
 *.csv
 *.pdf
+*.png
+*.slurm.log
+hourly_flags.json
