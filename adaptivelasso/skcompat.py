@@ -5,6 +5,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error
 from adaptivelasso import jax_vlMAP, adaptive_prior, group_prior, hier_prior
+from adaptivelasso.core import expand_X_int, expand_X_quad
 from joblib import Parallel, delayed
 from adaptivelasso.utils import report_model_results
 from pprint import pprint
@@ -31,6 +32,9 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         tol=1e-4,
         prog=False,
         ada=True,
+        es_patience=500,
+        n_es=1000,
+        snapshot_interval=10,
     ):
         self.tau0 = tau0
         self.max_iters = max_iters
@@ -51,6 +55,9 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.tol = tol
         self.prog=prog
         self.ada = ada
+        self.es_patience = es_patience
+        self.n_es = n_es
+        self.snapshot_interval = snapshot_interval
 
     def fit(self, X, y):
         X = np.asarray(X)
@@ -124,7 +131,11 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
                 custom_nll_grad=self.custom_nll_grad,
                 custom_prior=self.custom_prior,
                 intr=intr,
-                quad=quad
+                quad=quad,
+                es_patience=self.es_patience,
+                random_state=self.random_state,
+                N_es=self.n_es,
+                snapshot_interval=self.snapshot_interval
             )
             self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=self.prog, ada = self.ada, tol=self.tol)
             return self
@@ -168,10 +179,22 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.model_ = best_model.model_
         return self
 
+    def _expand_X(self, X):
+        # The core model stores X un-expanded and expands per-minibatch just in time, so its
+        # beta is P-dimensional while callers hold Pu-dimensional inputs; apply the same
+        # expansion here before touching beta.
+        X = np.asarray(X)
+        m = self.model_
+        if getattr(m, 'quad', False):
+            return np.asarray(expand_X_quad(X, m.ind1_exp, m.ind2_exp))
+        if getattr(m, 'intr', False):
+            return np.asarray(expand_X_int(X, m.ind1_exp, m.ind2_exp))
+        return X
+
     def predict(self, X):
+        X_arr = self._expand_X(X)
         if self.lik == 'cauchy':
             # For Cauchy, use clipped location parameter directly instead of mean()
-            X_arr = np.asarray(X)
             beta = self.model_.vv['beta']
             beta0 = self.model_.vv['beta0']
             # Calculate predictions and clip to avoid extreme values
@@ -179,7 +202,7 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
             return np.clip(np.array(preds), -10, 10)
         else:
             # Use normal prediction for other likelihoods
-            return np.array(self.model_.predictive(np.asarray(X)).mean())
+            return np.array(self.model_.predictive(X_arr).mean())
 
     def score(self, X, y):
         y_pred = self.predict(X)

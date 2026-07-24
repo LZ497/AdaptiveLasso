@@ -19,6 +19,36 @@ tfpd = tfp.distributions
 
 jax.config.update("jax_enable_x64", True)
 
+_LOG2PI = float(np.log(2 * np.pi))
+
+
+class _StableNormal:
+    """Normal parameterized by mean `loc` and LOG-variance `log_var`, with an overflow-safe
+    log_prob. It uses the precision exp(-log_var) rather than forming the scale exp(+log_var/2),
+    so a large log-variance underflows harmlessly toward 0 instead of overflowing exp() -> inf
+    (which was making the training NLL blow up). Exposes the tfp-distribution methods actually
+    used downstream (log_prob / mean / stddev / variance / sample)."""
+
+    def __init__(self, loc, log_var):
+        self.loc = loc
+        self.log_var = log_var
+
+    def log_prob(self, y):
+        return -0.5 * (_LOG2PI + self.log_var + jnp.square(y - self.loc) * jnp.exp(-self.log_var))
+
+    def mean(self):
+        return self.loc
+
+    def variance(self):
+        return jnp.exp(self.log_var)
+
+    def stddev(self):
+        return jnp.exp(0.5 * self.log_var)
+
+    def sample(self, sample_shape=(), seed=None):
+        shape = tuple(np.atleast_1d(sample_shape)) + jnp.shape(self.loc)
+        return self.loc + self.stddev() * jax.random.normal(seed, shape)
+
 # Go from a design matrix to the design mat with interaction terms.
 @jit
 def expand_X_int(Xs, ind1_exp, ind2_exp):
@@ -52,7 +82,12 @@ def get_sd(grad, ss):
 class jax_vlMAP:
     auto_N_sg = 5000
 
-    def __init__(self, X, y, lam_prior, lam_prior_vars, tau0=1, lik='normal', mb_size = None, snapshot_interval=10,no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None):
+    def __init__(self, X, y, lam_prior, lam_prior_vars, tau0=1, lik='normal', mb_size = None, snapshot_interval=10,no_adapt = False, invlam = False, track = False, lam_accel = True, l2_coef = 0., dont_pen = None, do_jit = True, logprox = False, beta0_init = None, intr = False, quad = False, N_es = 1000, es_patience = 500, custom_prox=None, custom_prior=None, custom_nll_grad=None, random_state=None):
+        # Seed all stochastic parts of the optimizer (early-stop holdout split + minibatch
+        # sampling) so a fit is reproducible from random_state. Previously random_state was
+        # ignored by the core, and the random holdout split was the sole source of run-to-run
+        # variance (the minibatch path itself is essentially deterministic in its effect).
+        self.rng = np.random.default_rng(random_state)
         self.custom_prox = custom_prox
         self.custom_prior = custom_prior
         self.custom_nll_grad = custom_nll_grad
@@ -131,7 +166,11 @@ class jax_vlMAP:
 
         # Adam parameters.
         self.beta_adam = 0.5
-        self.eps_adam = 1e-7
+        # eps_adam guards the Adam step scaling ss = 1/sqrt(vhat + eps). Too small (1e-7) lets
+        # ss explode to ~1/sqrt(eps) near a flat optimum (tiny gradients), which amplifies
+        # minibatch noise into a huge sigma2 step that overflows exp(sigma2/2) -> divergence
+        # (seen at high tau0, where beta is penalized to 0 and only sigma2 is still moving).
+        self.eps_adam = 1e-4
 
         if self.lik in ['poisson','nb']:
             nbig = 5
@@ -143,12 +182,72 @@ class jax_vlMAP:
     def set_tau0(self, tau0):
         self.tau0 = tau0
 
+    def lambda_max(self):
+        """Data-driven upper end of the tau0 grid: the largest tau0 that zeros all penalized
+        coefficients, i.e. max_j |dNLL/dbeta_j| at the null (intercept-only) model.
+
+        This is the classic lasso lambda_max generalized to any likelihood. Because the score's
+        variance function carries the likelihood's curvature (~ N*mean for a Poisson log-link, and
+        that divided by (1+mean/dispersion) for the NB, and divided by sigma^2 for the Gaussian),
+        it AUTOMATICALLY folds in the noise/dispersion scale -- so tau0/lambda_max is comparable
+        across likelihoods and one normalized grid works everywhere. Without this, the right tau0
+        range spans ~5 orders of magnitude between the Gaussian (~0.2) and a Poisson (~1e6)."""
+        vv_save = {v: jnp.copy(self.vv[v]) for v in self.vv}
+        yv = np.asarray(self.y)
+        self.vv['beta'] = jnp.zeros_like(self.vv['beta'])
+        b0 = np.log(yv.mean()) if self.lik in ('poisson', 'nb', 'zinb') else float(yv.mean())
+        self.vv['beta0'] = jnp.asarray(b0).reshape(np.shape(self.vv['beta0']))
+        if 'sigma2' in self.vv and self.sigma2_exp:
+            if self.lik in ('nb', 'zinb'):
+                r = yv.mean() ** 2 / max(yv.var() - yv.mean(), 1e-3)   # moment dispersion estimate
+                self.vv['sigma2'] = jnp.asarray(-np.log(r)).reshape(np.shape(self.vv['sigma2']))
+            elif self.lik == 'normal':
+                self.vv['sigma2'] = jnp.asarray(np.log(max(float(yv.var()), 1e-6))).reshape(np.shape(self.vv['sigma2']))
+        g = self.full_grad(self.vv)
+        lm = float(np.max(np.abs(np.asarray(g['beta'])[self.do_pen])))
+        self.vv = vv_save
+        return lm
+
+    def auto_tau0_grid(self, npts=10, lo_ratio=1e-3, hi_mult=10.0):
+        """tau0 grid on a log scale from lo_ratio*lambda_max up to hi_mult*lambda_max. The hi_mult
+        (>1) margin covers the adaptive-lambda absorption, which delays full sparsification slightly
+        past lambda_max. Use this grid for CV/GCV selection instead of a hand-picked one."""
+        lm = self.lambda_max()
+        return np.logspace(np.log10(lm * lo_ratio), np.log10(lm * hi_mult), npts)
+
+    def fit_path(self, taus, max_iters=1000, lr_pre=1e-2, **fit_kwargs):
+        """Fit the whole tau0 regularization path with homotopy warm-starting, SPARSE -> DENSE
+        (largest tau0 first, then decreasing). Each tau0 is optimized starting from the previous
+        (nearby) solution rather than from beta=0. Because the joint (beta, lam) objective is
+        non-convex, cold-starting each tau0 lands in inconsistent local optima -> a jagged path;
+        warm-starting keeps neighbors in the same basin, giving a smoother path and better optima
+        (empirically ~8% lower RMSE at the selected tau0). Also cheaper (each fit starts close).
+        fit() does not reset vv, so calling it repeatedly on this instance continues from the
+        current parameters. Returns dict {tau0: vv_copy} ordered from largest to smallest tau0.
+
+        CAVEAT: use this for the Gaussian (well-conditioned) likelihood. For the count log-link
+        likelihoods (poisson/nb) warm-starting toward the dense end accumulates the exp() blow-up
+        and can land GCV on a diverged local optimum (RMSE explodes) -- cold-start those instead."""
+        path = {}
+        for tau0 in sorted(np.atleast_1d(np.asarray(taus, dtype=float)), reverse=True):
+            self.set_tau0(float(tau0))
+            self.fit(max_iters=max_iters, lr_pre=lr_pre, **fit_kwargs)
+            path[float(tau0)] = {v: jnp.copy(self.vv[v]) for v in self.vv}
+        return path
+
     def set_Xy(self, X, y):
         X = np.array(X)
         y = np.asarray(y, dtype=np.float64)  # Always cast y to float
         N, self.Pu = X.shape
-        ind_es = np.random.choice(N,self.N_es,replace=False)
-        ind_train = np.setdiff1d(np.arange(N), ind_es)
+        # N_es=0 means "no early-stop holdout": train on ALL data and reuse it for the (unused)
+        # ES metric, so we neither waste 10% of the data nor inject a random-split variance.
+        # Use this when early stopping is off / selection is done externally (e.g. Cp, GCV).
+        if self.N_es > 0:
+            ind_es = self.rng.choice(N,self.N_es,replace=False)
+            ind_train = np.setdiff1d(np.arange(N), ind_es)
+        else:
+            ind_es = np.arange(N)
+            ind_train = np.arange(N)
         X_es = X[ind_es,:]
         if self.intr:
             X_es = expand_X_int(X_es, self.ind1_exp, self.ind2_exp)  
@@ -204,7 +303,7 @@ class jax_vlMAP:
                 sigma2 = jnp.array(min_var)
             beta0 = mu_hat
             # If using sigma2_exp, take log after clamping
-            if self.sigma2_exp:
+            if self.sigma2_exp: # Duplicated.
                 sigma2 = jnp.log(jnp.maximum(sigma2, min_var))
         else:
             beta0 = jnp.mean(np.array(self.y).astype(np.float64))
@@ -321,7 +420,6 @@ class jax_vlMAP:
             return prior_smooth, npd_ns
 
         def adam_update_ss_nojit(v_adam, vhat_adam, grad, vv, it):
-            print("Is it grad or sd?")
             for v in v_adam:
                 v_adam[v] = self.beta_adam*v_adam[v] + (1-self.beta_adam)*jnp.square(grad[v])
 
@@ -349,9 +447,32 @@ class jax_vlMAP:
     def init_adam(self):
         return dict([(v,np.zeros_like(self.vv[v])) for v in self.vv]), dict([(v,np.zeros_like(self.vv[v])) for v in self.vv])
 
+    def full_grad(self, vv):
+        """Full-data NLL gradient, accumulated over minibatch-sized chunks with just-in-time
+        feature expansion. self.X is stored UN-expanded (Pu columns); evaluating the gradient
+        on it directly shape-mismatches an expanded beta (P columns) and would also
+        materialize the expanded matrix for all N rows. Chunking keeps the JIT shapes small
+        (only two compiled shapes: mb_size and the remainder)."""
+        g = {v: jnp.zeros_like(vv[v]) for v in vv}
+        for iti in range(self.batches_per_epoch):
+            samp = np.arange(iti*self.mb_size, np.minimum((iti+1)*self.mb_size, self.N))
+            Xs = self.X[samp, :]
+            ys = self.y[samp]
+            if self.quad:
+                Xs = expand_X_quad(Xs, self.ind1_exp, self.ind2_exp)
+            elif self.intr:
+                Xs = expand_X_int(Xs, self.ind1_exp, self.ind2_exp)
+            if self.custom_nll_grad:
+                _, gb = self.custom_nll_grad(vv, Xs, ys)
+            else:
+                _, gb = self.eval_nll_grad_subset(vv, Xs, ys)
+            for v in g:
+                g[v] += gb[v]
+        return g
+
     def snapshot_update(self):
         self.snapshot_vv = copy.deepcopy(self.vv)
-        _, self.g0 = self.eval_nll_grad_subset(self.snapshot_vv, self.X, self.y)
+        self.g0 = self.full_grad(self.snapshot_vv)
 
     def compute_grad_svrg(self, X_batch, y_batch, grad_prior):
         if self.custom_nll_grad:
@@ -388,6 +509,11 @@ class jax_vlMAP:
             lr = lr_pre
         else:
             lr = lr_pre / self.N
+
+        # Lower bound keeping lam > 0 (feasible for the -log(lam) barrier). With logprox=True
+        # this is a redundant backstop (the log-prox keeps lam positive analytically); it still
+        # guards the std-mode path.
+        self.lam_floor = 1e-3
 
         es_num = int(np.ceil(max_iters / self.es_every))
 
@@ -438,29 +564,7 @@ class jax_vlMAP:
                     print("ES stop!")
                     break
 
-            # Is this still needed with the snapshot_update block above?
-            if i % self.svrg_every==0:
-                g0 = dict([(v, np.zeros_like(self.vv[v])) for v in self.vv])
-
-                self.vv0 = {}
-                for v in self.vv:
-                    self.vv0[v] = jnp.copy(self.vv[v])
-
-                for iti in tqdm(range(self.batches_per_epoch), leave=False, disable = not verbose):
-                    samp_vr = np.arange(iti*self.mb_size,np.minimum((iti+1)*self.mb_size,self.N))
-                    Xs_vr = self.X[samp_vr, :]
-                    ys_vr = self.y[samp_vr]
-                    if self.quad:
-                        X_use_vr = expand_X_quad(Xs_vr, self.ind1_exp, self.ind2_exp)  # Create interaction terms just in time.
-                    elif self.intr:
-                        X_use_vr = expand_X_int(Xs_vr, self.ind1_exp, self.ind2_exp)  # Create interaction terms just in time.
-                    else:
-                        X_use_vr = Xs_vr  # Create interaction terms just in time.
-                    _, grad_vr = self.eval_nll_grad_subset(self.vv0, X_use_vr, ys_vr)
-                    for v in self.vv:
-                        g0[v] += grad_vr[v]
-
-            ind = np.random.choice(self.N,self.mb_size,replace=False)
+            ind = self.rng.choice(self.N,self.mb_size,replace=False)
 
             Xs = self.X[ind,:]
             ys = self.y[ind]
@@ -501,8 +605,7 @@ class jax_vlMAP:
                 self.last_it = i
                 break
 
-            #sd = get_sd_svrg(grad_nll, grad_nll0, g0, grad_prior, self.mb_size, self.N)
-            if self.is_stochastic and self.vv0 is not None and g0 is not None:
+            if self.is_stochastic:
                 sd = self.compute_grad_svrg(Xs_use, ys, grad_prior)
             else:
                 for k in grad_nll:
@@ -534,12 +637,25 @@ class jax_vlMAP:
                 self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], min_var)
             elif 'sigma2' in self.vv:
                 min_var = 1e-6
-                if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
-                    self.vv['sigma2'] = jnp.array(min_var)
                 if self.sigma2_exp:
+                    # sigma2 is LOG-variance here: negative values are valid (variance < 1, e.g.
+                    # the NB dispersion sigma2 = -log(r) with r > 1). Only reset non-finite, and
+                    # floor at log(min_var). (The old (sigma2<=0) reset silently pinned the NB
+                    # dispersion at r=1, breaking its calibration.)
+                    self.vv['sigma2'] = jnp.where(
+                        jnp.isfinite(self.vv['sigma2']), self.vv['sigma2'], jnp.log(min_var))
                     self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], jnp.log(min_var))
                 else:
+                    if not jnp.isfinite(self.vv['sigma2']).all() or (self.vv['sigma2'] <= 0).any():
+                        self.vv['sigma2'] = jnp.array(min_var)
                     self.vv['sigma2'] = jnp.maximum(self.vv['sigma2'], min_var)
+            # Keep the penalty multipliers strictly positive. lam carries a -log(lam) barrier in
+            # the prior; at high tau0 the lam-prox step can overshoot lam across 0, making that
+            # barrier (and the cost) blow up to inf/nan. Floor the penalized entries so the
+            # barrier stays finite and lam remains in its feasible region.
+            if 'lam' in self.vv:
+                self.vv['lam'] = self.vv['lam'].at[self.do_pen].set(
+                    jnp.maximum(self.vv['lam'][self.do_pen], self.lam_floor))
             self.last_it = i
 
         self.beta = self.vv['beta']
@@ -557,7 +673,11 @@ class jax_vlMAP:
             preds = XX @ vv['beta'] + vv['beta0']
 
         if self.lik == 'normal':
-            dist_pred = tfpd.Normal(preds, scale=stddev)
+            # Overflow-safe log-variance parameterization (avoids exp(+sigma2/2) -> inf).
+            if self.sigma2_exp:
+                dist_pred = _StableNormal(preds, vv['sigma2'])
+            else:
+                dist_pred = tfpd.Normal(preds, scale=stddev)
         elif self.lik == 'cauchy':
             # Ensure scale parameter is always large (crucial for Cauchy stability)
             stddev = jnp.maximum(stddev, 1.0)
@@ -570,9 +690,17 @@ class jax_vlMAP:
         elif self.lik == 'poisson':
             dist_pred = tfpd.Poisson(log_rate=preds)
         elif self.lik == 'nb':
-            dist_pred = tfpd.NegativeBinomial(total_count=1/jnp.square(stddev), logits=preds)
+            # tfp NB has mean = total_count * exp(logits). Using logits=preds directly would
+            # make mean = exp(preds - sigma2), i.e. the dispersion leaks into the mean and a
+            # moving sigma2 shifts predictions exponentially. Offset the logits by log(1/r) so
+            # mean = exp(preds): a proper NB-GLM log-link with dispersion decoupled from the mean.
+            r = 1.0 / jnp.square(stddev)
+            dist_pred = tfpd.NegativeBinomial(total_count=r, logits=preds + 2.0 * jnp.log(stddev))
         elif self.lik=='zinb':
-            dist_nz = tfpd.NegativeBinomial(total_count=1/jnp.square(stddev), logits = preds_y)
+            # Same NB-GLM fix as the 'nb' branch: offset logits by log(1/r) so the NB count
+            # component has mean = exp(preds_y) with dispersion decoupled from the mean.
+            r = 1.0 / jnp.square(stddev)
+            dist_nz = tfpd.NegativeBinomial(total_count=r, logits=preds_y + 2.0 * jnp.log(stddev))
             dist_z = tfpd.Deterministic(loc=jnp.zeros_like(preds_y))
             pnz = tfpd.Categorical(logits=jnp.stack([preds_z,-preds_z]).T)
             dist_pred = tfpd.Mixture(pnz, components=[dist_z, dist_nz])

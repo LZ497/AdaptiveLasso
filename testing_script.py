@@ -116,24 +116,40 @@ def compare_models_on_log_likelihood(mapa_model, lasso_model, X_train, y_train, 
     else:
         print("\nConclusion (Log-Likelihood): The LassoCV (Normal) model is a better fit for this data.")
 
-def main():
-    """Main function to run the script."""
-    data_path = './day.csv'
-    X, y = load_and_preprocess_data(data_path)
-    X_train, X_test, y_train, y_test = train_test_preparation(X, y, random_state=0)
 
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
 
+
+
+
+"""Main function to run the script."""
+data_path = './day.csv'
+X, y = load_and_preprocess_data(data_path)
+X_train, X_test, y_train, y_test = train_test_preparation(X, y, random_state=0)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+lams = np.logspace(-4,4,num=100)
+L = len(lams)
+me_is = np.nan*np.zeros(L)
+me_oos = np.nan*np.zeros(L)
+glm_is = np.nan*np.zeros(L)
+glm_oos = np.nan*np.zeros(L)
+for li,l in enumerate(lams):
     print("\n--- Training Best MAPAdaptiveLasso (NB) Model ---")
     best_mapa_params = {
-        'tau0': 0.01, 'max_iters': 1000, 'lr_pre': 0.001, 'mb_size': 32, 
-        'invlam': False, 'logprox': False, 'lam_prior': 'adaptive', 
+        #'tau0': 0.01, 'max_iters': 1000, 'lr_pre': 0.001, 'mb_size': 32, 
+        #'tau0': 0.01, 'max_iters': 1000, 'lr_pre': 0.001, 'mb_size': 32, 'es_patience' : 1e8,
+        #'tau0': 0.01, 'max_iters': 2000, 'lr_pre': 0.001, 'mb_size': 32, 'es_patience' : 1e8,
+        'tau0': l, 'max_iters': 2000, 'lr_pre': 0.001, 'mb_size': 32, 'es_patience' : 1e8,
+        #'tau0': 1., 'max_iters': 1000, 'lr_pre': 0.001, 'mb_size': 32, 
+        'invlam': False, 'logprox': False, 'lam_prior': 'adaptive', 'expand' : 'quad',
         'lik': 'nb', 'expand': 'none', 'tol': 0.0001
     }
-    mapa_nb_model = MAPAdaptiveLasso(**best_mapa_params, random_state=123)
+    mapa_nb_model = MAPAdaptiveLasso(**best_mapa_params, random_state=123, track=True)
     mapa_nb_model.fit(X_train_scaled, y_train)
+    #mapa_nb_model.model_.plot('traj.png')
     print("Training complete.")
 
     print("\n--- Training Standard LassoCV Model ---")
@@ -141,24 +157,64 @@ def main():
     lasso_cv_model.fit(X_train_scaled, y_train)
     print(f"Training complete. Best alpha found: {lasso_cv_model.alpha_:.4f}")
 
-    # --- Perform both comparisons on the test set ---
-    compare_models_on_crps(
-        mapa_model=mapa_nb_model,
-        lasso_model=lasso_cv_model,
-        X_train=X_train_scaled,
-        y_train=y_train,
-        X_test=X_test_scaled,
-        y_test=y_test
-    )
-    
-    compare_models_on_log_likelihood(
-        mapa_model=mapa_nb_model,
-        lasso_model=lasso_cv_model,
-        X_train=X_train_scaled,
-        y_train=y_train,
-        X_test=X_test_scaled,
-        y_test=y_test
-    )
+    fit_me = mapa_nb_model.predict(X_train_scaled)
+    fit_glm = lasso_cv_model.predict(X_train_scaled)
+    pred_me = mapa_nb_model.predict(X_test_scaled)
+    pred_glm = lasso_cv_model.predict(X_test_scaled)
 
-if __name__ == "__main__":
-    main()
+    #import matplotlib.pyplot as plt
+    #fig = plt.figure()
+    #for i in range(2):
+    #    plt.subplot(1,2,i+1)
+    #
+    #    if i==0:
+    #        plt.scatter(fit_me, y_train, label = 'me')
+    #        plt.scatter(fit_glm, y_train, label = 'glm')
+    #        plt.title("In sample")
+    #    else:
+    #        plt.scatter(pred_me, y_test, label = 'me')
+    #        plt.scatter(pred_glm, y_test, label = 'glm')
+    #        plt.title("OoS")
+    #
+    #    plt.plot([0,np.max(y_train)],[0,np.max(y_train)],color='black', linestyle='--')
+    #    plt.legend()
+    #
+    #plt.savefig("pva.pdf")
+    #plt.close()
+
+    mapa_nb_model.model_.vv['beta']
+    lasso_cv_model.coef_
+
+    trans = lambda x: x
+    #loss = np.abs
+    loss = np.square
+
+    me_is[li] = np.mean(loss(trans(fit_me) - trans(y_train)))
+    glm_is[li] = np.mean(loss(trans(fit_glm) - trans(y_train)))
+    print(me_is[li])
+    print(glm_is[li])
+
+    me_oos[li] = np.mean(loss(trans(pred_me) - trans(y_test)))
+    glm_oos[li] = np.mean(loss(trans(pred_glm) - trans(y_test)))
+    print(me_oos[li])
+    print(glm_oos[li])
+
+# --- Perform both comparisons on the test set ---
+compare_models_on_crps(
+    mapa_model=mapa_nb_model,
+    lasso_model=lasso_cv_model,
+    X_train=X_train_scaled,
+    y_train=y_train,
+    X_test=X_test_scaled,
+    y_test=y_test
+)
+
+compare_models_on_log_likelihood(
+    mapa_model=mapa_nb_model,
+    lasso_model=lasso_cv_model,
+    X_train=X_train_scaled,
+    y_train=y_train,
+    X_test=X_test_scaled,
+    y_test=y_test
+)
+
