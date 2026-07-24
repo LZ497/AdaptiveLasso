@@ -78,10 +78,11 @@ To illustrate the practical benefit of likelihood flexibility, we compare `adapt
 | Model | Likelihood | RMSE $\downarrow$ | CRPS $\downarrow$ | 90% Coverage |
 | :--- | :--- | :---: | :---: | :---: |
 | `LassoCV` | Gaussian | 19.86 | 10.05 | 0.91 |
+| `adaptivelasso` | Gaussian | 19.84 | 10.06 | 0.91 |
 | `adaptivelasso` | Poisson | 15.90 | 7.16 | 0.67 |
 | `adaptivelasso` | Negative Binomial | 16.46 | 6.64 | 0.90 |
 
-Matching the likelihood to the data materially improves accuracy: both count-likelihood fits reduce RMSE by 17-20% and CRPS by 29-34% relative to `LassoCV`. However, accuracy alone does not tell the full story — the Poisson fit's 90% predictive interval only covers 67% of held-out observations, reflecting the equidispersion assumption's failure on overdispersed count data, while the Negative Binomial fit remains well-calibrated (0.90 coverage) at comparable accuracy. This is precisely the gap `adaptivelasso` is designed to close: `LassoCV` cannot represent either count likelihood, and a package limited to Poisson alone would trade accuracy for miscalibrated uncertainty. This benchmark is reproducible via `hourly_compare.py` in the project repository; a broader empirical evaluation is given in @Wycoff2024.
+The first two rows isolate the cost of `adaptivelasso`'s joint adaptive-penalty optimization from the benefit of likelihood choice: constrained to the same Gaussian assumption `LassoCV` is built on, `adaptivelasso` matches its accuracy and calibration essentially exactly (RMSE 19.84 vs. 19.86, CRPS 10.06 vs. 10.05, both at 0.91 coverage) — the added flexibility costs nothing when the Gaussian assumption actually holds. The remaining rows isolate the benefit of likelihood choice, something `LassoCV` cannot represent at all: matching a Negative Binomial likelihood to this overdispersed count target reduces RMSE by 17% and CRPS by 34% relative to the Gaussian baseline while remaining well-calibrated (0.90 coverage); Poisson achieves a similar RMSE reduction (20%) but its 90% intervals cover only 67% of held-out observations, reflecting the equidispersion assumption's failure on this data. This is precisely the gap `adaptivelasso` is designed to close: a package restricted to Poisson alone would trade accuracy for miscalibrated uncertainty, and one restricted to Gaussian (like `LassoCV`) cannot access either likelihood's accuracy gain in the first place. This benchmark is reproducible via `hourly_compare.py` in the project repository; a broader empirical evaluation is given in @Wycoff2024.
 
 # Acknowledgements
 
