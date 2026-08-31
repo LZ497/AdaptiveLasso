@@ -4,7 +4,10 @@ Short fits only — checks plumbing, not accuracy."""
 import time
 import numpy as np
 from adaptivelasso.skcompat import MAPAdaptiveLasso
-from hourly_common import load_hourly, make_splits, eval_adalasso
+try:
+    from .hourly_common import load_hourly, make_splits, eval_adalasso
+except ImportError:
+    from hourly_common import load_hourly, make_splits, eval_adalasso
 
 X, y = load_hourly()
 sp = make_splits(X, y)

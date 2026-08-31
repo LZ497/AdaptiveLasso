@@ -7,7 +7,7 @@ deviance on the validation split, refit on the full train at frac * lambda_max(f
 
 Optimizer flags per likelihood come from hourly_flags.json (produced by the tuning stage).
 
-Usage: python hourly_compare.py [flags_json] [results_csv] [targets...]
+Usage: python -m experiments.hourly_compare [flags_json] [results_csv] [targets...]
   targets: any of {lasso, normal, poisson, nb}; default all (enables one SLURM job per piece).
 """
 import json
@@ -20,7 +20,10 @@ import pandas as pd
 from sklearn.linear_model import LassoCV
 
 from adaptivelasso.skcompat import MAPAdaptiveLasso
-from hourly_common import (load_hourly, make_splits, expand_np, eval_adalasso, eval_lasso)
+try:
+    from .hourly_common import (load_hourly, make_splits, expand_np, eval_adalasso, eval_lasso)
+except ImportError:
+    from hourly_common import (load_hourly, make_splits, expand_np, eval_adalasso, eval_lasso)
 
 FLAGS_JSON = sys.argv[1] if len(sys.argv) > 1 else 'hourly_flags.json'
 CSV = sys.argv[2] if len(sys.argv) > 2 else 'hourly_compare_results.csv'

@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptivelasso"
+version = "0.1.0"
+description = "Sparse Bayesian regression with adaptive lasso penalties, JAX optimization, and a scikit-learn compatible API."
+readme = "readme.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Nathan Wycoff" },
+]
+keywords = [
+    "adaptive lasso",
+    "sparse regression",
+    "bayesian statistics",
+    "jax",
+    "scikit-learn",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "jax>=0.4.20,<0.5",
+    "tensorflow-probability>=0.23,<0.26",
+    "numpy>=1.24,<2",
+    "scipy>=1.10,<1.14",
+    "scikit-learn>=1.1,<2",
+    "tqdm>=4.64",
+    "matplotlib>=3.5",
+    "numba>=0.57",
+    "joblib>=1.2",
+]
+
+[project.optional-dependencies]
+examples = [
+    "pandas>=1.5",
+    "properscoring>=0.1",
+]
+dev = [
+    "pytest>=7",
+    "build>=1",
+]
+
+[project.urls]
+Repository = "https://github.com/LZ497/AdaptiveLasso"
+
+[tool.setuptools.packages.find]
+include = ["adaptivelasso*"]
