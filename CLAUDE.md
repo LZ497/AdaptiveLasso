@@ -6,22 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `adaptivelasso` is a research library for sparse Bayesian regression: gradient-based MAP
 estimation with sparsity-inducing (adaptive/group/hierarchical) priors, implemented in JAX
-with a scikit-learn–compatible wrapper. It is a plain Python package used by importing the
-`adaptivelasso/` directory — there is **no** `setup.py`/`pyproject.toml`, so run scripts from
-the repo root so `import adaptivelasso` resolves.
+with a scikit-learn-compatible wrapper. The project is installable through `pyproject.toml`;
+use an editable install for local development.
 
 ## Environment & commands
 
 ```bash
-pip install -r requirements.txt   # pinned: jax/jaxlib 0.4.20, tensorflow-probability 0.23.0, numpy 1.24.3
-python testing_script.py          # end-to-end demo: MAPAdaptiveLasso vs LassoCV on day.csv (bike sharing)
+python -m pip install -e .             # core package
+python -m pip install -r requirements.txt  # package plus example dependencies
+python examples/testing_script.py      # end-to-end demo: MAPAdaptiveLasso vs LassoCV on day.csv (bike sharing)
 ```
 
-- **No test suite / linter / CI.** `testing_script.py` and `my_place.py` are runnable demo/scratch
-  scripts (top-level code, not `pytest`); `Usage.ipynb` and `compare_lasscv_adaptivelass.ipynb` are
-  the worked examples. Validate changes by running these, not a test command.
-- `quartic_roots.py` imports **numba** (`@jit`), which is *not* in `requirements.txt` — it is only
-  needed on the `invlam=True` code path. Install it separately if touching that path.
+- **No test suite / linter / CI.** `examples/testing_script.py` and `examples/my_place.py` are
+  runnable demo/scratch scripts (top-level code, not `pytest`); `examples/Usage.ipynb` and
+  `examples/compare_lasscv_adaptivelass.ipynb` are the worked examples. Validate changes by running
+  relevant examples or experiment smoke scripts, not a test command.
+- `quartic_roots.py` imports **numba** (`@jit`), which is declared as a package dependency because
+  it is required on the `invlam=True` code path.
 - JAX runs in float64 (`jax.config.update("jax_enable_x64", True)` in `core.py`). Keep this — the
   proximal/root-finding math depends on double precision.
 
@@ -37,7 +38,7 @@ fresh shell (loaded modules / activated envs do not persist between calls):
 ```bash
 srun --partition=cpu --cpus-per-task=4 --mem=16G --time=01:00:00 \
   bash -lc 'module load conda/latest && conda activate AdaptiveLasso &&
-            cd /home/nwycoff_umass_edu/AdaptiveLasso && python testing_script.py'
+            cd /home/nwycoff_umass_edu/AdaptiveLasso && python examples/testing_script.py'
 ```
 
 For several commands in a row, allocate once and reuse (avoids re-queueing each time):
@@ -82,6 +83,12 @@ Three layers, bottom-up:
 `utils.py` has `generate_data` (synthetic data per likelihood) and `report_model_results` (metrics).
 `__init__.py` re-exports `jax_vlMAP`, the three priors, and `quartic_roots`.
 
+Top-level organization:
+- `adaptivelasso/`: library code only.
+- `examples/`: runnable demos and notebooks.
+- `experiments/`: paper benchmark and tuning scripts, including `hourly_compare.py`.
+- `paper/`: manuscript source and bibliography.
+
 ### Key concepts to keep straight
 
 - **Three λ-penalty modes**, mutually constrained by `logprox` and `invlam` (both `True` is asserted
@@ -109,4 +116,4 @@ Three layers, bottom-up:
   which is the default). All are keys in `vv`.
 - Custom hooks let you bypass the built-ins: `custom_nll_grad` (with `lik='none'`),
   `custom_prior`, `custom_prox`.
-- The git-tracked `day.csv` is the bike-sharing dataset consumed by `testing_script.py`.
+- `examples/testing_script.py` expects the bike-sharing `day.csv` file to be available locally.

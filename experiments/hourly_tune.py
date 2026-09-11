@@ -2,7 +2,7 @@
 (SVRG minibatch) at two tau0 strengths (frac of lambda_max), expand='quad' (the hardest case).
 Writes one CSV row per fit as it completes.
 
-Usage: python hourly_tune.py [csv_out] [lik ...]
+Usage: python -m experiments.hourly_tune [csv_out] [lik ...]
 """
 import os
 import sys
@@ -12,7 +12,10 @@ import numpy as np
 import pandas as pd
 
 from adaptivelasso.skcompat import MAPAdaptiveLasso
-from hourly_common import load_hourly, make_splits, eval_adalasso
+try:
+    from .hourly_common import load_hourly, make_splits, eval_adalasso
+except ImportError:
+    from hourly_common import load_hourly, make_splits, eval_adalasso
 
 CSV = sys.argv[1] if len(sys.argv) > 1 else 'hourly_tune_results.csv'
 LIKS = sys.argv[2:] if len(sys.argv) > 2 else ['normal', 'poisson', 'nb']

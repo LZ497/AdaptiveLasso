@@ -3,7 +3,7 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.model_selection import KFold, ParameterGrid
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import accuracy_score, mean_poisson_deviance, mean_squared_error, r2_score
 from adaptivelasso import jax_vlMAP, adaptive_prior, group_prior, hier_prior
 from adaptivelasso.core import expand_X_int, expand_X_quad
 from joblib import Parallel, delayed
@@ -60,90 +60,22 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         self.snapshot_interval = snapshot_interval
 
     def fit(self, X, y):
+        feature_names = getattr(X, "columns", None)
         X = np.asarray(X)
         y = np.asarray(y)
-        P = X.shape[1]
+        self.n_features_in_ = X.shape[1]
+        if feature_names is not None:
+            self.feature_names_in_ = np.asarray(feature_names, dtype=object)
 
         if self.cv is None:
-            # Standard fit
-            prior_map = {
-                'adaptive': adaptive_prior,
-                'group': group_prior,
-                'hier': hier_prior
-            }
-            prior_func = prior_map[self.lam_prior]
-
-            # Handle expand logic
-            expand = self.expand
-            if expand not in {'none', 'intr', 'quad'}:
-                raise ValueError("expand must be one of {'none', 'intr', 'quad'}")
-            if self.lam_prior == 'hier' and expand not in {'intr', 'quad'}:
-                print("Warning: lam_prior='hier' requires expand to be 'intr' or 'quad'. Setting expand='quad'.")
-                expand = 'quad'
-
-            intr = (expand == 'intr')
-            quad = (expand == 'quad')
-
-            # Group prior: require groups to be set
-            if self.lam_prior == 'group':
-                if self.lam_prior_vars is None or 'groups' not in self.lam_prior_vars:
-                    raise ValueError("For lam_prior='group', you must provide 'groups' in lam_prior_vars.")
-
-            # Set lam_prior_vars defaults if needed (except for group, which must be provided)
-            if self.lam_prior_vars is None:
-                if self.lam_prior == 'group':
-                    G = int(np.ceil(np.sqrt(P)))  # P must be known here
-                    lam_prior_vars = {
-                        'log_gamma': np.zeros(G),
-                        'groups': np.repeat(np.arange(G), P // G + 1)[:P]
-                    }
-                elif self.lam_prior == 'hier':
-                    G = P  
-                    lam_prior_vars = {
-                        'log_gamma': np.zeros(G)
-                    }
-                else:
-                    lam_prior_vars = {}
-            else:
-                lam_prior_vars = self.lam_prior_vars
-
-            if 'groups' in lam_prior_vars:
-                lam_prior_vars['groups'] = np.asarray(lam_prior_vars['groups']).astype(int)
-            
-            if self.logprox and self.invlam:
-                raise ValueError("Invalid configuration: logprox=True and invlam=True is disallowed.")
-
-            if 'log_gamma' in lam_prior_vars:
-                lam_prior_vars['log_gamma'] = np.clip(lam_prior_vars['log_gamma'], -10.0, 10.0)
-
-            self.model_ = jax_vlMAP(
-                X=X,
-                y=y,
-                lam_prior=prior_func,
-                lam_prior_vars=lam_prior_vars,
-                lik=self.lik,
-                tau0=self.tau0,
-                mb_size=self.mb_size,
-                invlam=self.invlam,
-                logprox=self.logprox,
-                track=self.track,
-                custom_prox=self.custom_prox,
-                custom_nll_grad=self.custom_nll_grad,
-                custom_prior=self.custom_prior,
-                intr=intr,
-                quad=quad,
-                es_patience=self.es_patience,
-                random_state=self.random_state,
-                N_es=self.n_es,
-                snapshot_interval=self.snapshot_interval
-            )
-            self.model_.fit(max_iters=self.max_iters, lr_pre=self.lr_pre, verbose=self.prog, ada = self.ada, tol=self.tol)
-            return self
+            return self._fit_core(X, y)
 
         # --- Cross-validation logic ---
+        if self.cv < 2:
+            raise ValueError("cv must be at least 2 when cross-validation is enabled.")
+
         kf = KFold(n_splits=self.cv, shuffle=True, random_state=self.random_state)
-        best_score = -np.inf
-        best_model = None
+        cv_scores = []
 
         for train_idx, val_idx in kf.split(X):
             X_train, X_val = X[train_idx], X[val_idx]
@@ -165,21 +97,107 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
                 custom_nll_grad=self.custom_nll_grad,
                 custom_prior=self.custom_prior,
                 expand=self.expand,
-                cv=None,  # Don't recurse!
+                cv=None,
                 random_state=self.random_state,
-                tol=self.tol
+                tol=self.tol,
+                prog=self.prog,
+                ada=self.ada,
+                es_patience=self.es_patience,
+                n_es=self.n_es,
+                snapshot_interval=self.snapshot_interval,
             )
             model.fit(X_train, y_train)
-            score = model.score(X_val, y_val)
-            if score > best_score:
-                best_score = score
-                best_model = model
+            cv_scores.append(model.score(X_val, y_val))
 
-        # Use the best model found
-        self.model_ = best_model.model_
+        self.cv_scores_ = np.asarray(cv_scores, dtype=float)
+        self.best_score_ = float(np.nanmean(self.cv_scores_))
+
+        # sklearn-style CV estimators refit the final model on all available training data.
+        self._fit_core(X, y)
+        return self
+
+    def _fit_core(self, X, y):
+        P = X.shape[1]
+        prior_map = {
+            'adaptive': adaptive_prior,
+            'group': group_prior,
+            'hier': hier_prior
+        }
+        if self.lam_prior not in prior_map:
+            raise ValueError("lam_prior must be one of {'adaptive', 'group', 'hier'}")
+        prior_func = prior_map[self.lam_prior]
+
+        expand = self.expand
+        if expand not in {'none', 'intr', 'quad'}:
+            raise ValueError("expand must be one of {'none', 'intr', 'quad'}")
+        if self.lam_prior == 'hier' and expand not in {'intr', 'quad'}:
+            print("Warning: lam_prior='hier' requires expand to be 'intr' or 'quad'. Setting expand='quad'.")
+            expand = 'quad'
+
+        intr = (expand == 'intr')
+        quad = (expand == 'quad')
+
+        if self.lam_prior == 'group':
+            if self.lam_prior_vars is None or 'groups' not in self.lam_prior_vars:
+                raise ValueError("For lam_prior='group', you must provide 'groups' in lam_prior_vars.")
+
+        if self.lam_prior_vars is None:
+            if self.lam_prior == 'group':
+                G = int(np.ceil(np.sqrt(P)))
+                lam_prior_vars = {
+                    'log_gamma': np.zeros(G),
+                    'groups': np.repeat(np.arange(G), P // G + 1)[:P]
+                }
+            elif self.lam_prior == 'hier':
+                lam_prior_vars = {'log_gamma': np.zeros(P)}
+            else:
+                lam_prior_vars = {}
+        else:
+            lam_prior_vars = self.lam_prior_vars.copy()
+
+        if 'groups' in lam_prior_vars:
+            lam_prior_vars['groups'] = np.asarray(lam_prior_vars['groups']).astype(int)
+
+        if self.logprox and self.invlam:
+            raise ValueError("Invalid configuration: logprox=True and invlam=True is disallowed.")
+
+        if 'log_gamma' in lam_prior_vars:
+            lam_prior_vars['log_gamma'] = np.clip(lam_prior_vars['log_gamma'], -10.0, 10.0)
+
+        self.model_ = jax_vlMAP(
+            X=X,
+            y=y,
+            lam_prior=prior_func,
+            lam_prior_vars=lam_prior_vars,
+            lik=self.lik,
+            tau0=self.tau0,
+            mb_size=self.mb_size,
+            invlam=self.invlam,
+            logprox=self.logprox,
+            track=self.track,
+            custom_prox=self.custom_prox,
+            custom_nll_grad=self.custom_nll_grad,
+            custom_prior=self.custom_prior,
+            intr=intr,
+            quad=quad,
+            es_patience=self.es_patience,
+            random_state=self.random_state,
+            N_es=self.n_es,
+            snapshot_interval=self.snapshot_interval
+        )
+        self.model_.fit(
+            max_iters=self.max_iters,
+            lr_pre=self.lr_pre,
+            verbose=self.prog,
+            ada=self.ada,
+            tol=self.tol,
+        )
+        self.coef_ = np.asarray(self.model_.vv['beta'])
+        self.intercept_ = float(np.asarray(self.model_.vv['beta0']).ravel()[0])
         return self
 
     def _expand_X(self, X):
+        self._check_is_fitted()
         # The core model stores X un-expanded and expands per-minibatch just in time, so its
         # beta is P-dimensional while callers hold Pu-dimensional inputs; apply the same
         # expansion here before touching beta.
@@ -190,6 +208,14 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
         if getattr(m, 'intr', False):
             return np.asarray(expand_X_int(X, m.ind1_exp, m.ind2_exp))
         return X
+
+    def _check_is_fitted(self):
+        if not hasattr(self, 'model_'):
+            raise RuntimeError("You must fit the model before using this method.")
+
+    def predictive(self, X):
+        X_arr = self._expand_X(X)
+        return self.model_.predictive(X_arr)
 
     def predict(self, X):
         X_arr = self._expand_X(X)
@@ -204,12 +230,26 @@ class MAPAdaptiveLasso(BaseEstimator, RegressorMixin):
             # Use normal prediction for other likelihoods
             return np.array(self.model_.predictive(X_arr).mean())
 
+    def predict_proba(self, X):
+        if self.lik != 'bernoulli':
+            raise AttributeError("predict_proba is only available when lik='bernoulli'.")
+        p1 = np.asarray(self.predict(X), dtype=float)
+        return np.column_stack([1.0 - p1, p1])
+
     def score(self, X, y):
+        self._check_is_fitted()
         y_pred = self.predict(X)
         y = np.asarray(y)
-        return 1 - np.sum((y - y_pred) ** 2) / np.sum((y - np.mean(y)) ** 2)
+        if self.lik == 'bernoulli':
+            return accuracy_score(y, y_pred >= 0.5)
+        if self.lik == 'poisson':
+            return -mean_poisson_deviance(y, np.maximum(y_pred, 1e-12))
+        if self.lik in {'nb', 'zinb'}:
+            return -float(np.mean(np.asarray(self.predictive(X).log_prob(np.round(y)))))
+        return r2_score(y, y_pred)
 
     def get_coefficients(self):
+        self._check_is_fitted()
         return np.array(self.model_.beta)
 
 
@@ -248,7 +288,7 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring=None, random
         elif first_lik == 'bernoulli':
             scoring = 'acc'
         elif first_lik in ['poisson', 'nb', 'zinb']:
-            scoring = 'neg_rmse'
+            scoring = 'neg_poisson_deviance' if first_lik == 'poisson' else 'neg_nb_deviance'
         else:
             scoring = 'r2'  # Fallback for other likelihoods
 
@@ -288,7 +328,7 @@ def grid_search_adaptivelasso(X, y, param_grid, n_splits=5, scoring=None, random
                 'mean_explained_variance': np.mean([m.get('explained_variance', -np.inf) for m in metrics_list]),
                 'mean_accuracy': np.mean([m.get('accuracy', 0) for m in metrics_list]),
                 'mean_auc': np.mean([m.get('AUC', 0) for m in metrics_list]),
-                'mean_f1': np.mean([m.get('F1', 0) for m in metrics_list]),
+                'mean_f1': np.mean([m.get('f1', 0) for m in metrics_list]),
                 'mean_poisson_deviance': np.mean([m.get('poisson_deviance', np.inf) for m in metrics_list]),
                 'mean_nb_deviance': np.mean([m.get('nb_deviance', np.inf) for m in metrics_list]),
             }
@@ -415,12 +455,22 @@ class MAPAdaptiveLassoCV(BaseEstimator, RegressorMixin):
             verbose=self.verbose
         )
         self.best_params_, self.best_score_, self.all_results_, self.best_model_ = results
+        self.coef_ = self.best_model_.coef_
+        self.intercept_ = self.best_model_.intercept_
+        self.n_features_in_ = self.best_model_.n_features_in_
+        if hasattr(self.best_model_, 'feature_names_in_'):
+            self.feature_names_in_ = self.best_model_.feature_names_in_
         return self
 
     def predict(self, X):
         if self.best_model_ is None:
             raise RuntimeError("You must fit the model before predicting.")
         return self.best_model_.predict(X)
+
+    def predict_proba(self, X):
+        if self.best_model_ is None:
+            raise RuntimeError("You must fit the model before predicting probabilities.")
+        return self.best_model_.predict_proba(X)
 
     def score(self, X, y):
         if self.best_model_ is None:

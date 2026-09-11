@@ -6,3 +6,6 @@
 *.png
 *.slurm.log
 hourly_flags.json
+*.egg-info/
+build/
+dist/

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# filepath: /Users/u543860/AdaptiveLasso/testing_script.py
+# filepath: /Users/u543860/AdaptiveLasso/examples/testing_script.py
 
 """
 Test script for MAPAdaptiveLassoCV on the bike sharing dataset.
@@ -9,7 +9,7 @@ including data preprocessing, model training, and evaluation using both
 CRPS and Log-Likelihood scoring rules.
 
 Usage:
-    python testing_script.py [--data_path DATA_PATH] [--random_state RANDOM_STATE]
+    python examples/testing_script.py [--data_path DATA_PATH] [--random_state RANDOM_STATE]
 """
 
 import numpy as np
@@ -217,4 +217,3 @@ compare_models_on_log_likelihood(
     X_test=X_test_scaled,
     y_test=y_test
 )
-
