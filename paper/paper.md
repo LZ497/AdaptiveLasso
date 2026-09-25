@@ -83,21 +83,24 @@ This allows for the possibility that data will overwhelm a misspecified sparsity
 
 # Comparison and Features
 
-`adaptivelasso` supports a versatile set of likelihood functions and prior structures. A key advantage is its ability to handle non-standard distributions that are not supported by the standard `LassoCV` estimator in scikit-learn.
+`adaptivelasso` supports a versatile set of likelihood functions and prior structures. We compare it against the most widely-used sparse regression packages in the Python and R ecosystems: scikit-learn's `LassoCV` [@Pedregosa2011]; R's `glmnet` [@Friedman2010], the standard coordinate-descent solver for penalized GLMs; `ncvreg` [@BrehenyHuang2011], which targets the same estimation-bias problem as the Adaptive Lasso but through nonconvex (MCP/SCAD) penalties rather than jointly-learned weights; its group-selection counterpart `grpreg` [@BrehenyHuang2009]; and `pyglmnet` [@Jas2020], a pure-Python elastic-net GLM library.
 
-| Distribution / Feature | `adaptivelasso` | `sklearn.linear_model.LassoCV` |
-| :--- | :---: | :---: |
-| Gaussian (Normal) | ✅ | ✅ |
-| Bernoulli (Binary) | ✅ | ❌$^1$ |
-| Poisson (Count) | ✅ | ❌$^2$ |
-| Negative Binomial | ✅ | ❌ |
-| Cauchy (Robust) | ✅ | ❌ |
-| Zero-Inflated NB (ZINB) | ✅ | ❌ |
-| **Adaptive Penalty Learning** | ✅ | ❌ |
-| **Group/Hierarchical Priors** | ✅ | ❌ |
+| Distribution / Feature | `adaptivelasso` | `LassoCV` | `glmnet` | `ncvreg` | `grpreg` | `pyglmnet` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Gaussian (Normal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Bernoulli (Binary) | ✅ | ❌$^1$ | ✅ | ✅ | ✅ | ✅ |
+| Poisson (Count) | ✅ | ❌$^2$ | ✅ | ✅ | ✅ | ✅ |
+| Negative Binomial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Cauchy (Robust) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Zero-Inflated NB (ZINB) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Adaptive Penalty Learning** | ✅ | ❌ | ❌$^3$ | ❌$^4$ | ❌$^4$ | ❌ |
+| **Group/Hierarchical Priors** | ✅ | ❌ | ❌ | ❌ | ❌$^5$ | ❌$^5$ |
 
 $^1$ *Requires `LogisticRegression(penalty='l1')`.*
 $^2$ *Requires `PoissonRegressor` (no built-in CV path).*
+$^3$ *`glmnet` accepts a user-supplied, fixed `penalty.factor` per coefficient (enabling a manual two-step adaptive lasso), but does not jointly learn it with $\beta$.*
+$^4$ *Debiasing is instead achieved via a nonconvex penalty shape (MCP/SCAD), a fixed-form alternative to jointly learning a per-coefficient weight.*
+$^5$ *Supports hard, all-or-nothing group-level selection, not the soft, prior-driven structure (including overlapping/hierarchical groups) that `adaptivelasso` induces on $\lambda$.*
 
 Key features include:
 * **Adaptive Priors:** Supports Independent, Group, and Overlapping Group (Hierarchical) priors for structured sparsity [@Wycoff2024].
