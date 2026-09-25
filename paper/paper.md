@@ -81,6 +81,12 @@ This framework incorporates sparsity structure in a ``soft" manner, encouraging 
 This allows for the possibility that data will overwhelm a misspecified sparsity structure, unlike in the classical group lasso setting.
 <!-- This formulation allows the penalty strength to adapt locally to each coefficient, reducing bias for large parameters while maintaining sparsity [@Wycoff2024]. -->
 
+# Software Design
+
+The core joint $(\beta, \lambda)$ proximal MAP optimization follows the framework introduced in our companion paper [@Wycoff2024]. Our contribution here is packaging this into `adaptivelasso`: a scikit-learn-compatible `BaseEstimator` that lets the optimizer be dropped into standard pipelines and cross-validation tooling.
+Two engineering decisions were central. First, feature expansion (`intr`/`quad`) is applied just-in-time per minibatch rather than materializing the full expanded design matrix, keeping memory use independent of the expansion order.
+Second, since different likelihoods require the regularization strength $\tau$ to vary by several orders of magnitude to reach comparable sparsity, we added `auto_tau0_grid()`, which derives a likelihood-normalized grid from each model's null-model gradient rather than requiring users to search likelihood-specific scales by hand.
+
 # Comparison and Features
 
 `adaptivelasso` supports a versatile set of likelihood functions and prior structures. We compare it against the most widely-used sparse regression packages in the Python and R ecosystems: scikit-learn's `LassoCV` [@Pedregosa2011]; R's `glmnet` [@Friedman2010], the standard coordinate-descent solver for penalized GLMs; `ncvreg` [@BrehenyHuang2011], which targets the same estimation-bias problem as the Adaptive Lasso but through nonconvex (MCP/SCAD) penalties rather than jointly-learned weights; its group-selection counterpart `grpreg` [@BrehenyHuang2009]; and `pyglmnet` [@Jas2020], a pure-Python elastic-net GLM library.
