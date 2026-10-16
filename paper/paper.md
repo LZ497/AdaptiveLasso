@@ -8,10 +8,13 @@ tags:
   - JAX
   - adaptive lasso
 authors:
-  # TODO: Replace placeholder names and complete affiliations before submission.
-  - name: Name 1
-  - name: Name 2
+  # TODO: Complete author affiliations before submission.
+  - name: Linpei Zhang
+    equal-contrib: true
+  - name: Jui-Ting Chang
+    equal-contrib: true
   - name: Nathan Wycoff
+    equal-contrib: true
     affiliation: 2
 affiliations:
  - name: Department of Mathematics and Statistics, University of Massachusetts, Amherst
@@ -34,11 +37,11 @@ Combining these requirements creates a software problem: changing a likelihood o
 
 # Software Design
 
-`adaptivelasso` separates likelihoods and sparsity priors from a shared optimization engine, allowing researchers to change the observation model or structural assumptions without implementing a new solver for each combination. Building on the joint proximal MAP framework of @Wycoff2024, the engine uses JAX differentiation for smooth likelihood and prior terms and a joint proximal update for regression coefficients and penalty weights. We extended this architecture with custom likelihood-gradient, prior, and proximal hooks so that new model components can reuse the fitting machinery. This modularity supports methodological experimentation alongside the built-in regression models.
+`adaptivelasso` is designed around a recurring research task: varying the response distribution and sparsity assumptions while reusing the same computational machinery. Its software contribution is an integrated fitting engine that coordinates model components, expanded feature representations, and regularization search. The architecture separates likelihood and prior specification from optimization, using JAX differentiation for smooth terms and the joint coefficient-and-penalty proximal update of @Wycoff2024. Custom likelihood-gradient and prior interfaces provide extension points for methods researchers. This separation allows new model specifications to reuse the optimizer and feature-handling infrastructure, reducing the implementation work needed to explore alternative sparse models.
 
-To support interaction models on larger datasets, we integrated SVRG with on-demand feature expansion. Training inputs remain in their original representation; interaction and quadratic features are constructed for each minibatch. Full-data reference gradients are accumulated over chunks using the same transformation, and prediction applies the corresponding expansion to user inputs. Coordinating these paths allows variance reduction and expanded models to work together while avoiding storage of the entire expanded training matrix. The trade-off is repeated feature construction, and model parameters still grow with the expanded feature count. This design targets large in-memory analyses.
+A central engineering contribution is coordinating interaction-feature construction with variance-reduced optimization. Expanding all observations in advance can make interaction models expensive to store, even when the original data fit comfortably in memory. We integrated on-demand expansion with both SVRG minibatch updates and chunked full-data reference gradients, and applied the corresponding transformation during prediction. Researchers can therefore supply the original predictors throughout the workflow while fitting models with interaction or quadratic terms. Repeated feature construction trades computation for a smaller expanded training-matrix workspace; parameter storage still grows with the expanded feature count. This design makes the feature representation part of the optimization strategy for large in-memory analyses.
 
-We also developed likelihood-aware regularization search to make model comparison practical. A common absolute penalty grid can miss useful sparsity levels when likelihood scales differ. Our search uses a reference scale derived from coefficient gradients at an intercept-only initialization, with likelihood-specific scale or dispersion estimates. This provides a data-dependent search range rather than a guaranteed sparsification threshold. Scikit-learn-compatible cross-validation and refitting connect this search to standard preprocessing workflows [@Pedregosa2011].
+A second contribution addresses the practical cost of moving between likelihoods. Since useful penalty scales can differ substantially, we developed a regularization search based on coefficient gradients at an intercept-only initialization, with likelihood-specific scale or dispersion estimates. The resulting reference defines a data-dependent search range rather than a guaranteed sparsification threshold. In the example workflow, the selected relative penalty is rescaled before refitting on the full training set. Scikit-learn-compatible estimator interfaces connect the fitting engine to existing preprocessing and model-selection tools [@Pedregosa2011], allowing researchers to reuse familiar analysis components alongside the package's specialized optimization.
 
 # Comparison and Features
 
