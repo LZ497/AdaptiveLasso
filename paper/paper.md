@@ -8,6 +8,7 @@ tags:
   - JAX
   - adaptive lasso
 authors:
+  # TODO: Replace placeholder names and complete affiliations before submission.
   - name: Name 1
   - name: Name 2
   - name: Nathan Wycoff
@@ -21,119 +22,77 @@ bibliography: paper.bib
 
 # Summary
 
-In this data-rich era, where datasets are often large both in terms of the number of records ("large $N$") and the number of recorded features ("large $P$"), it is often insufficient to merely produce a model with adequate predictive performance.
-It is also critical that the behavior of this model be interpretable. 
-One strategy for this is to conduct *variable selection*, which involves presenting all $P$ variables to an algorithm but requiring that it choose only a few of these to use in its final model.
-Though variable selection can be achieved through many means, in this article we are concerned with *sparsity-inducing penalties*: penalty functions that have a gradient singularity at the origin, allowing variable selection to be conducted as a byproduct of the optimization.
-The most popular such penalty is the Lasso [@Tibshirani1996].
+`adaptivelasso` is a Python library for sparse regression when researchers need to select interpretable predictors while accounting for count responses, heavy-tailed observations, or relationships among variables. It combines six likelihoods with adaptive, group, and hierarchical penalty priors in a shared JAX implementation [@Bradbury2018]. Researchers can change the observation model and sparsity structure while retaining the same fitting, prediction, and model-selection workflow.
 
-Oftentimes, we have information about the relationship between variables that we'd like our method to exploit. 
-For instance, some columns of the dataset may encode interaction effects between two or more variables, and we'd only like to select the interaction if we've also selected the main effects [@Bien2013].
-Alternatively, subject matter expertise may tell us that certain groups of variables are related and should be selected jointly or not at all [@YuanLin2006].
-Expectations of even more sophisticated sparsity structures have been proposed in the form of, e.g., the graphical Lasso [@Friedman2008].
-We will not be able here to provide an adequate review of all exciting work which has been conducted in this enormous field. 
-
-In order to devise the most computationally efficient optimizer possible for any of these approaches, it is necessary to exploit the specific structure found in the model's cost function as well as the type of sparsity desired. 
-However, this approach makes prototyping complex combinations of models and sparsity structures a labor-intensive process.
-This was the motivation for our companion article [@Wycoff2024], in which we introduced an optimization method capable of handling generic combinations of models and sparsity structures, so long as both can be described via a differentiable cost function. 
-The core idea is to motivate an adaptive lasso as a Bayesian MAP estimator.
-We implement this using a novel proximal gradient method which fits simultaneously the model parameters and the penalty coefficients, with the sparsity structure being driven by a prior density on the penalty coefficients. 
-
-In the present article, we present a wrapper of our method compatible with the **scikit-learn** [@Pedregosa2011] pipeline and based on **JAX** [@Bradbury2018], which allows for straightforward deployment on accelerators and CPUs alike.
-This enables inference on a wide variety of problems involving large datasets via a variance-reduced incremental proximal gradient method. 
-We hope our code will be useful to practitioners who wish to quickly prototype in settings where all three of the data, model, and sparsity are challenging for classical coordinate-descent methods. 
-
+The library builds on the joint estimation of regression coefficients and penalty weights developed by @Wycoff2024. Our software contributions make combinations of observation models and sparsity structures usable within a common analysis workflow: variance-reduced optimization with expanded features, likelihood-aware regularization search, and repeatable model selection. A scikit-learn-compatible interface [@Pedregosa2011] connects these capabilities to established Python workflows.
 
 # Statement of Need
 
-The authors of many existing tools for sparse inference have done excellent work in providing optimized algorithms for specific model classes. 
-`glmnet` [@Friedman2010] provides a coordinate-descent optimizer which can be extremely efficient when only a few variables are active, and related coordinate-descent methods have also been implemented for a greater variety of sparsifying penalties by `ncvreg` [@BrehenyHuang2011]. 
-Nevertheless, the computational efficiency of these methods is not universal: they require datasets to fit in memory and can be quite slow when many correlated variables are in the model (i.e., if only a moderate sparsity level is required).
-In addition, shrinkage directly with the absolute value function produces bias, in that nonzero parameters have smaller magnitudes than is suggested directly by the data, and forces a trade-off between variable selection and estimation accuracy. 
-The Adaptive Lasso [@Zou2006] addresses this last point by varying the penalty strengths for each variable in a pre-processing step. 
-However, it's not clear how to achieve this efficiently in complex models with non-Gaussian likelihoods and nonlinearities.
-Furthermore, proximal gradient methods allow for quite general smooth likelihoods to be deployed, but rely on the derivation of a proximal operator associated with any desired sparsity structure, which may or may not be tractable. 
+Sparse regression is useful when prediction must be accompanied by a manageable set of explanatory variables. The Lasso [@Tibshirani1996] performs selection through a common penalty, while the Adaptive Lasso [@Zou2006] allows different amounts of shrinkage for different coefficients. Applied workflows often also need to accommodate overdispersed counts, outliers, or related predictors. Groups and interactions introduce further choices about which variables should be encouraged to enter a model together [@YuanLin2006; @Bien2013].
 
-The present work therefore allows the analyst to work with a much more general class of problems and sparsity structures than the existing literature while avoiding the bias of plain $\ell_1$ regularization, all while using mini-batch SVRG optimization to scale to large in-memory datasets.
-In addressing these needs, `adaptivelasso` enables users to deploy sophisticated, bias-corrected sparse regression models through the familiar scikit-learn API.
-
-<!-- While widely used tools like `glmnet`  and `scikit-learn` provide efficient implementations for standard Lasso and Elastic Net problems, they face limitations when dealing with complex, real-world modeling scenarios:
-
-1.  **Limited Likelihood Support:** Standard packages often restrict users to Gaussian, Binomial, or Poisson families. Researchers working with heavy-tailed data (requiring Cauchy likelihoods) or overdispersed count data (requiring Negative Binomial models) often lack access to efficient sparse estimators [@Wycoff2024].
-2.  **Bias in Estimation:** The standard $l_{1}$ penalty induces shrinkage that biases coefficient estimates towards zero. While the Adaptive Lasso mitigates this, it typically requires a two-step procedure that is difficult to tune for complex likelihoods .
-3.  **Structured Sparsity Complexity:** Implementing structured sparsity, such as Group Lasso or Hierarchical interactions (e.g., ensuring interaction terms are zero if main effects are zero), often requires specialized solvers or variable duplication strategies that are computationally expensive [@Wycoff2024]. -->
-
-
-# Mathematics
-
-The underlying optimization problem involves both model parameters $\beta\in\mathbb{R}^P$ and an associated penalty coefficient $\lambda_p\in\mathbb{R}_+$ for each $p\in\{1,\ldots,P\}$.
-The mathematical program is expressible as:
-
-$$
-\underset{\beta \in \mathbb{R}^P, \lambda \in \mathbb{R}_+^P}{\textrm{argmin}}
- \mathcal{L}(\beta) + \sum_{p=1}^{P} [\tau \lambda_p |\beta_p| - \log \lambda_p] - \log P_\lambda(\lambda)
-$$
-
-where $\mathcal{L}(\beta)$ is a cost function defining the model, such as a negative log-likelihood, $\tau$ is a global regularization strength, and the term $\tau \lambda_p |\beta_p| - \log \lambda_p$ represents a variable-coefficient $l_{1}$ penalty derived from a MAP-Bayesian perspective.
-Finally, the term $\log P_\lambda$ refers to the prior log density of $\lambda$, which is where the desired structural aspects of sparsity are defined.
-For instance, we could penalize the deviation of all $\lambda_p$ belonging to a group of variables from their mean, which would incentivize all variables in that group to be jointly zero or nonzero.
-This framework incorporates sparsity structure in a ``soft" manner, encouraging it without mandating it. 
-This allows for the possibility that data will overwhelm a misspecified sparsity structure, unlike in the classical group lasso setting.
-<!-- This formulation allows the penalty strength to adapt locally to each coefficient, reducing bias for large parameters while maintaining sparsity [@Wycoff2024]. -->
+Combining these requirements creates a software problem: changing a likelihood or sparsity structure can require a different solver, tuning scale, feature representation, and evaluation procedure. `adaptivelasso` targets researchers comparing such combinations within one analysis, and methods researchers extending the underlying objective. Its built-in Gaussian, Bernoulli, Poisson, Negative Binomial, Cauchy, and zero-inflated Negative Binomial likelihoods share independent adaptive, group, and hierarchical penalty components. Structure is encouraged through priors on penalty weights; it does not impose hard group-selection or interaction-heredity constraints.
 
 # Software Design
 
-The core joint $(\beta, \lambda)$ proximal MAP optimization follows the framework introduced in our companion paper [@Wycoff2024]. Our contribution here is packaging this into `adaptivelasso`: a scikit-learn-compatible `BaseEstimator` that lets the optimizer be dropped into standard pipelines and cross-validation tooling.
-Two engineering decisions were central. First, feature expansion (`intr`/`quad`) is applied just-in-time per minibatch rather than materializing the full expanded design matrix, keeping memory use independent of the expansion order.
-Second, since different likelihoods require the regularization strength $\tau$ to vary by several orders of magnitude to reach comparable sparsity, we added `auto_tau0_grid()`, which derives a likelihood-normalized grid from each model's null-model gradient rather than requiring users to search likelihood-specific scales by hand.
+`adaptivelasso` separates likelihoods and sparsity priors from a shared optimization engine, allowing researchers to change the observation model or structural assumptions without implementing a new solver for each combination. Building on the joint proximal MAP framework of @Wycoff2024, the engine uses JAX differentiation for smooth likelihood and prior terms and a joint proximal update for regression coefficients and penalty weights. We extended this architecture with custom likelihood-gradient, prior, and proximal hooks so that new model components can reuse the fitting machinery. This modularity supports methodological experimentation alongside the built-in regression models.
+
+To support interaction models on larger datasets, we integrated SVRG with on-demand feature expansion. Training inputs remain in their original representation; interaction and quadratic features are constructed for each minibatch. Full-data reference gradients are accumulated over chunks using the same transformation, and prediction applies the corresponding expansion to user inputs. Coordinating these paths allows variance reduction and expanded models to work together while avoiding storage of the entire expanded training matrix. The trade-off is repeated feature construction, and model parameters still grow with the expanded feature count. This design targets large in-memory analyses.
+
+We also developed likelihood-aware regularization search to make model comparison practical. A common absolute penalty grid can miss useful sparsity levels when likelihood scales differ. Our search uses a reference scale derived from coefficient gradients at an intercept-only initialization, with likelihood-specific scale or dispersion estimates. This provides a data-dependent search range rather than a guaranteed sparsification threshold. Scikit-learn-compatible cross-validation and refitting connect this search to standard preprocessing workflows [@Pedregosa2011].
 
 # Comparison and Features
 
-`adaptivelasso` supports a versatile set of likelihood functions and prior structures. We compare it against the most widely-used sparse regression packages in the Python and R ecosystems: scikit-learn's `LassoCV` [@Pedregosa2011]; R's `glmnet` [@Friedman2010], the standard coordinate-descent solver for penalized GLMs; `ncvreg` [@BrehenyHuang2011], which targets the same estimation-bias problem as the Adaptive Lasso but through nonconvex (MCP/SCAD) penalties rather than jointly-learned weights; its group-selection counterpart `grpreg` [@BrehenyHuang2009]; and `pyglmnet` [@Jas2020], a pure-Python elastic-net GLM library.
+`adaptivelasso` supports a versatile set of likelihood functions and prior structures. We compare it with established sparse regression tools in the Python and R ecosystems: scikit-learn's `LassoCV` [@Pedregosa2011]; R's `glmnet` [@Friedman2010], the standard coordinate-descent solver for penalized GLMs; `ncvreg` [@BrehenyHuang2011], which targets the same estimation-bias problem as the Adaptive Lasso but through nonconvex (MCP/SCAD) penalties rather than jointly-learned weights; its group-selection counterpart `grpreg` [@BrehenyHuang2009]; and `pyglmnet` [@Jas2020], a pure-Python elastic-net GLM library.
+
+Joint estimation requires the optimizer to maintain and update both regression coefficients and penalty weights, including their coupled proximal step. This requirement goes beyond choosing fixed penalty factors in a conventional penalized-regression estimator. A dedicated fitting engine supports that joint state and its structural priors, while the scikit-learn interface reuses established preprocessing and model-selection tools.
+
+The table distinguishes jointly learned penalty weights and soft priors on those weights from fixed penalty factors and group-selection penalties. The scikit-learn column refers specifically to `LassoCV`; related estimators are identified in the notes.
 
 | Distribution / Feature | `adaptivelasso` | `LassoCV` | `glmnet` | `ncvreg` | `grpreg` | `pyglmnet` |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Gaussian (Normal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Bernoulli (Binary) | ✅ | ❌$^1$ | ✅ | ✅ | ✅ | ✅ |
 | Poisson (Count) | ✅ | ❌$^2$ | ✅ | ✅ | ✅ | ✅ |
-| Negative Binomial | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Negative Binomial | ✅ | ❌ | ✅$^6$ | ❌ | ❌ | ❌ |
 | Cauchy (Robust) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Zero-Inflated NB (ZINB) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Adaptive Penalty Learning** | ✅ | ❌ | ❌$^3$ | ❌$^4$ | ❌$^4$ | ❌ |
-| **Group/Hierarchical Priors** | ✅ | ❌ | ❌ | ❌ | ❌$^5$ | ❌$^5$ |
+| **Soft Group/Hierarchical Priors on Penalty Weights** | ✅ | ❌ | ❌ | ❌ | ❌$^5$ | ❌$^5$ |
 
 $^1$ *Requires `LogisticRegression(penalty='l1')`.*
 $^2$ *Requires `PoissonRegressor` (no built-in CV path).*
 $^3$ *`glmnet` accepts a user-supplied, fixed `penalty.factor` per coefficient (enabling a manual two-step adaptive lasso), but does not jointly learn it with $\beta$.*
 $^4$ *Debiasing is instead achieved via a nonconvex penalty shape (MCP/SCAD), a fixed-form alternative to jointly learning a per-coefficient weight.*
-$^5$ *Supports hard, all-or-nothing group-level selection, not the soft, prior-driven structure (including overlapping/hierarchical groups) that `adaptivelasso` induces on $\lambda$.*
+$^5$ *`grpreg` supports group-selection and bi-level penalties, allowing selection both between and within groups; `pyglmnet` supports group lasso. These penalties differ from the soft group/hierarchical priors on learned penalty weights used here (see the [grpreg documentation](https://pbreheny.github.io/grpreg/reference/grpreg.html) and [pyglmnet documentation](https://github.com/glm-tools/pyglmnet)).*
 
-Key features include:
-* **Adaptive Priors:** Supports Independent, Group, and Overlapping Group (Hierarchical) priors for structured sparsity [@Wycoff2024].
-* **SVRG Optimization:** Automatically enables Stochastic Variance Reduced Gradient (SVRG) optimization for large in-memory datasets to ensure fast and stable convergence [@Wycoff2024].
-* **Automatic Regularization Scaling:** `auto_tau0_grid()` derives a likelihood-normalized grid of regularization strengths from each model's null-model gradient, removing the need to manually search vastly different $\tau$ scales across likelihoods (which can span several orders of magnitude between, e.g., Gaussian and Poisson models).
-* **Robustness:** Includes robust regression capabilities via the Cauchy likelihood, suitable for data with outliers [@Wycoff2024].
+$^6$ *`glmnet` supports Negative Binomial regression through a family object such as `MASS::negative.binomial(theta = ...)`, with dispersion specified by the user. In `adaptivelasso`, dispersion is estimated during fitting (see the [glmnet family documentation](https://glmnet.stanford.edu/articles/glmnetFamily.html)).*
 
-# Empirical Illustration
+# Research Workflow Illustration
 
-We now deploy our method on the classical UCI Bike Sharing dataset [@FanaeeT2014], using data at the hourly level to emphasize the impact of non-Gaussianity. 
-The number of `casual` renters is an integer-valued count variable with a significant number of zeros, making conditional normality a poor assumption. 
-We compare our method under various likelihoods to the LassoCV method from scikit-learn.
-For both models, we allow for interaction terms, and select our regularization strength $\tau$ using the `auto_tau0_grid()` method from our package.
+The repository includes an end-to-end analysis of hourly casual rentals in the UCI Bike Sharing dataset [@FanaeeT2014]. This count response illustrates why likelihood choice should be available within a common sparse-regression workflow. The experiment scripts provide seeded train/validation/test splits, training-only preprocessing, likelihood-specific regularization scaling, validation-based selection, and refitting before test evaluation.
 
-| Model | Likelihood | RMSE $\downarrow$ | CRPS $\downarrow$ |
-| :--- | :--- | :---: | :---: | 
-| `LassoCV` | Gaussian | 19.86 | 10.05 | 
-| `adaptivelasso` | Gaussian | 19.84 | 10.06 | 
-| `adaptivelasso` | Poisson | 15.90 | 7.16 | 
-| `adaptivelasso` | Negative Binomial | 16.46 | 6.64 | 
+The following results illustrate that workflow with interaction features. RMSE measures point-prediction error; the continuous ranked probability score (CRPS) assesses predictive distributions, with lower values preferred for both metrics. For `LassoCV`, the experiment constructs a Gaussian predictive distribution using the training residual scale.
 
-<!-- The first two rows isolate the cost of `adaptivelasso`'s joint adaptive-penalty optimization from the benefit of likelihood choice: constrained to the same Gaussian assumption `LassoCV` is built on, `adaptivelasso` matches its accuracy and calibration essentially exactly (RMSE 19.84 vs. 19.86, CRPS 10.06 vs. 10.05, both at 0.91 coverage) — the added flexibility costs nothing when the Gaussian assumption actually holds. -->
+| Model | Likelihood | RMSE | CRPS |
+| :--- | :--- | ---: | ---: |
+| `LassoCV` | Gaussian | 19.86 | 10.05 |
+| `adaptivelasso` | Gaussian | 19.84 | 10.06 |
+| `adaptivelasso` | Poisson | 15.90 | 7.16 |
+| `adaptivelasso` | Negative Binomial | 16.46 | 6.64 |
 
-The first row gives the baseline performance of LassoCV, which uses a Gaussian likelihood, and measures performance in terms of RMSE and CRPS.
-The second row gives the performance of our method using the same settings as LassoCV, which has comparable performance, indicating that adaptation is not especially important for this benchmark. 
-However, the next two rows show that count models can lead to large improvements in both RMSE and CRPS, with the negative binomial giving slightly better uncertainty estimates (as measured by CRPS) while the Poisson provides slightly better point accuracy in terms of RMSE.
-See `experiments/hourly_compare.py` in the project repository to reproduce this example, and see @Wycoff2024 for significantly expanded numerical comparisons.
+The Gaussian rows have similar scores, while the count-model rows demonstrate the practical value of changing the observation model within the same software. This single dataset does not establish a general advantage of adaptive penalties or separate their effect from likelihood choice. The workflow is implemented in `experiments/hourly_compare.py`, with shared preprocessing and evaluation in `experiments/hourly_common.py`; methodological comparisons are discussed by @Wycoff2024.
+
+# AI Usage Disclosure
+
+OpenAI Codex assisted with manuscript drafting and revision, inspection of the repository's source code and development history, and checking software-comparison claims against official documentation.
+
+<!-- Disclosure remains incomplete. Before submission, the authors must add model/version
+information, disclose any additional AI use in software or documentation development,
+and describe the human review, editing, and validation actually performed. Do not assert
+that these steps are complete until confirmed by the authors.
+Other submission TODOs: complete author metadata, add automated correctness tests and CI,
+and provide data acquisition instructions, exact tuning flags, and archived results for
+the retained hourly benchmark table. -->
 
 # Acknowledgements
 
