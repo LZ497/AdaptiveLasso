@@ -17,6 +17,8 @@ authors:
     equal-contrib: true
     affiliation: 2
 affiliations:
+ - name: Independent Researcher
+   index: 1
  - name: Department of Mathematics and Statistics, University of Massachusetts, Amherst
    index: 2
 date: 11 December 2025
@@ -89,9 +91,8 @@ The following results illustrate that workflow with interaction features. RMSE m
 The Gaussian rows have similar scores, while the count-model rows demonstrate the practical value of changing the observation model within the same software. This single dataset does not establish a general advantage of adaptive penalties or separate their effect from likelihood choice. The workflow is implemented in `experiments/hourly_compare.py`, with shared preprocessing and evaluation in `experiments/hourly_common.py`; more methodological comparisons are given in @Wycoff2024.
 
 # AI Usage Disclosure
-We used AI tools to help with coding and with initial drafting.
-Afterwards, we refined the code and text ourselves.
-We take full responsibility for any errors.
+We used AI tools, including Claude Code with Opus 5.5, for code drafting, refactoring, and drafting the report.
+We made the core design decisions, and checked and edited the code and text afterwards for correctness and accuracy, and take full responsibility for correctness.
 
 # Acknowledgements
 
