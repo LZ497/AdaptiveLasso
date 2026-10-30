@@ -98,6 +98,7 @@ We made the core design decisions, and checked and edited the code and text afte
 
 # Acknowledgements
 
-The authors gratefully acknowledge funding from the Massive Data Institute, the Tech and Public Policy Grant Program, and NSF/NGA grant #2428033.
+NW gratefully acknowledges funding from the Massive Data Institute, the Tech and Public Policy Grant Program, and NSF/NGA grant #2428033.
+The computational resources for this work were provided by the UMass Amherst’s partnership with the Unity Research Computing Platform, a multi-institutional cluster led by the University of Massachusetts and the University of Rhode Island.
 
 # References
