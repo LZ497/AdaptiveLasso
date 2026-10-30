@@ -48,16 +48,16 @@ Joint estimation requires the optimizer to maintain and update both regression c
 
 The table distinguishes jointly learned penalty weights and soft priors on those weights from fixed penalty factors and group-selection penalties. The scikit-learn column refers specifically to `LassoCV`; related estimators are identified in the notes.
 
-| Distribution / Feature | `adaptivelasso` | `LassoCV` | `glmnet` | `ncvreg` | `grpreg` | `pyglmnet` |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Gaussian (Normal) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Bernoulli (Binary) | ✅ | ❌$^1$ | ✅ | ✅ | ✅ | ✅ |
-| Poisson (Count) | ✅ | ❌$^2$ | ✅ | ✅ | ✅ | ✅ |
-| Negative Binomial | ✅ | ❌ | ✅$^6$ | ❌ | ❌ | ❌ |
-| Cauchy (Robust) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Zero-Inflated NB (ZINB) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Adaptive Penalty Learning** | ✅ | ❌ | ❌$^3$ | ❌$^4$ | ❌$^4$ | ❌ |
-| **Soft Group/Hierarchical Priors on Penalty Weights** | ✅ | ❌ | ❌ | ❌ | ❌$^5$ | ❌$^5$ |
+| Feature                  | `adaptivelasso` | `LassoCV` | `glmnet` | `ncvreg` | `grpreg` | `pyglmnet` |
+|:-------------------------|:---:|:---:|:---:|:---:|:---:|:---:|
+| Gaussian                 | Yes | Yes | Yes | Yes | Yes | Yes |
+| Bernoulli                | Yes | No$^1$ | Yes | Yes | Yes | Yes |
+| Poisson                  | Yes | No$^2$ | Yes | Yes | Yes | Yes |
+| Negative Binomial        | Yes | No | Yes$^6$ | No | No | No |
+| Cauchy                   | Yes | No | No | No | No | No |
+| Zero-inflated NB         | Yes | No | No | No | No | No |
+| Learned penalty weights  | Yes | No | No$^3$ | No$^4$ | No$^4$ | No |
+| Soft structured priors   | Yes | No | No | No | No$^5$ | No$^5$ |
 
 $^1$ *Requires `LogisticRegression(penalty='l1')`.*
 $^2$ *Requires `PoissonRegressor` (no built-in CV path).*
