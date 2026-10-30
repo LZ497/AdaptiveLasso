@@ -37,15 +37,7 @@ Sparse regression is useful when prediction must be accompanied by a manageable 
 
 Combining these requirements creates a software problem: changing a likelihood or sparsity structure can require a different solver, tuning scale, feature representation, and evaluation procedure. `adaptivelasso` targets researchers comparing such combinations within one analysis, and methods researchers extending the underlying objective. Its built-in Gaussian, Bernoulli, Poisson, Negative Binomial, Cauchy, and zero-inflated Negative Binomial likelihoods share independent adaptive, group, and hierarchical penalty components. Structure is encouraged through priors on penalty weights; it does not impose hard group-selection or interaction-heredity constraints.
 
-# Software Design
-
-`adaptivelasso` is designed around a recurring research task, where the response distribution and sparsity assumptions vary. Its software contribution is an integrated fitting engine that coordinates model components, expanded feature representations, and regularization search. The architecture separates likelihood and prior specification from optimization, using JAX differentiation for smooth terms and the joint coefficient-and-penalty proximal update of @Wycoff2024 for the nonsmooth penalty for easy application. Custom likelihood-gradient and prior interfaces provide extension points for methods researchers. This separation allows new model specifications to reuse the optimizer and feature-handling infrastructure, reducing the implementation work needed to explore alternative sparse models.
-
-A central engineering contribution is coordinating interaction-feature construction with variance-reduced optimization. Expanding all observations in advance can make interaction models expensive to store, even when the original data fit comfortably in memory. We integrated on-demand expansion with both SVRG minibatch updates and chunked full-data reference gradients, and applied the corresponding transformation during prediction. Researchers can therefore supply the original predictors throughout the workflow while fitting models with interaction or quadratic terms. Repeated feature construction trades computation for a smaller expanded training-matrix workspace, a design feature that allows Out-of-Memory computation for large datasets.
-
-A second contribution addresses the practical cost of moving between likelihoods. Since useful penalty scales can differ substantially, we developed a regularization search based on coefficient gradients at an intercept-only initialization, with likelihood-specific scale or dispersion estimates. In the example workflow, the selected relative penalty is rescaled before refitting on the full training set. Scikit-learn-compatible estimator interfaces connect the fitting engine to existing preprocessing and model-selection tools [@Pedregosa2011], allowing researchers to reuse familiar analysis components alongside the package's specialized optimization.
-
-# Comparison and Features
+# State of the Field
 
 `adaptivelasso` supports a variety of likelihood functions and prior structures. We compare it with established sparse regression tools in the Python and R ecosystems: scikit-learn's `LassoCV` [@Pedregosa2011]; R's `glmnet` [@Friedman2010], the standard coordinate-descent solver for penalized GLMs; `ncvreg` [@BrehenyHuang2011], which targets the same estimation-bias problem as the Adaptive Lasso but through nonconvex (MCP/SCAD) penalties rather than jointly-learned weights; its group-selection counterpart `grpreg` [@BrehenyHuang2009]; and `pyglmnet` [@Jas2020], a pure-Python elastic-net GLM library.
 
@@ -72,9 +64,18 @@ $^5$ *`grpreg` supports group-selection and bi-level penalties, allowing selecti
 
 $^6$ *`glmnet` supports Negative Binomial regression through a family object such as `MASS::negative.binomial(theta = ...)`, with dispersion specified by the user. In `adaptivelasso`, dispersion is estimated during fitting (see the [glmnet family documentation](https://glmnet.stanford.edu/articles/glmnetFamily.html)).*
 
-# Research Workflow Illustration
+# Software Design
 
-The repository includes an end-to-end analysis of hourly casual rentals in the UCI Bike Sharing dataset [@FanaeeT2014]. This count response illustrates why likelihood choice should be available within a common sparse-regression workflow. The experiment scripts provide seeded train/validation/test splits, training-only preprocessing, likelihood-specific regularization scaling, validation-based selection, and refitting before test evaluation.
+`adaptivelasso` is designed around a recurring research task, where the response distribution and sparsity assumptions vary. Its software contribution is an integrated fitting engine that coordinates model components, expanded feature representations, and regularization search. The architecture separates likelihood and prior specification from optimization, using JAX differentiation for smooth terms and the joint coefficient-and-penalty proximal update of @Wycoff2024 for the nonsmooth penalty for easy application. Custom likelihood-gradient and prior interfaces provide extension points for methods researchers. This separation allows new model specifications to reuse the optimizer and feature-handling infrastructure, reducing the implementation work needed to explore alternative sparse models.
+
+A central engineering contribution is coordinating interaction-feature construction with variance-reduced optimization. Expanding all observations in advance can make interaction models expensive to store, even when the original data fit comfortably in memory. We integrated on-demand expansion with both SVRG minibatch updates and chunked full-data reference gradients, and applied the corresponding transformation during prediction. Researchers can therefore supply the original predictors throughout the workflow while fitting models with interaction or quadratic terms. Repeated feature construction trades computation for a smaller expanded training-matrix workspace, a design feature that allows Out-of-Memory computation for large datasets.
+
+A second contribution addresses the practical cost of moving between likelihoods. Since useful penalty scales can differ substantially, we developed a regularization search based on coefficient gradients at an intercept-only initialization, with likelihood-specific scale or dispersion estimates. In the example workflow, the selected relative penalty is rescaled before refitting on the full training set. Scikit-learn-compatible estimator interfaces connect the fitting engine to existing preprocessing and model-selection tools [@Pedregosa2011], allowing researchers to reuse familiar analysis components alongside the package's specialized optimization.
+
+
+# Research Impact Statement
+
+The code for [@Wycoff2024] has been refactored to this new standard, and we show just one example here. This repository includes an end-to-end analysis of hourly casual rentals in the UCI Bike Sharing dataset [@FanaeeT2014]. This count response illustrates why likelihood choice should be available within a common sparse-regression workflow. The experiment scripts provide seeded train/validation/test splits, training-only preprocessing, likelihood-specific regularization scaling, validation-based selection, and refitting before test evaluation.
 
 The following results illustrate that workflow with interaction features. RMSE measures point-prediction error; the continuous ranked probability score (CRPS) assesses predictive distributions, with lower values preferred for both metrics. For `LassoCV`, the experiment constructs a Gaussian predictive distribution using the training residual scale.
 
@@ -87,6 +88,10 @@ The following results illustrate that workflow with interaction features. RMSE m
 
 The Gaussian rows have similar scores, while the count-model rows demonstrate the practical value of changing the observation model within the same software. This single dataset does not establish a general advantage of adaptive penalties or separate their effect from likelihood choice. The workflow is implemented in `experiments/hourly_compare.py`, with shared preprocessing and evaluation in `experiments/hourly_common.py`; more methodological comparisons are given in @Wycoff2024.
 
+# AI Usage Disclosure
+We used AI tools to help with coding and with initial drafting.
+Afterwards, we refined the code and text ourselves.
+We take full responsibility for any errors.
 
 # Acknowledgements
 
