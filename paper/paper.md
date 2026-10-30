@@ -8,11 +8,12 @@ tags:
   - JAX
   - adaptive lasso
 authors:
-  # TODO: Complete author affiliations before submission.
   - name: Linpei Zhang
     equal-contrib: true
+    affiliation: 1
   - name: Jui-Ting Chang
     equal-contrib: true
+    affiliation: 1
   - name: Nathan Wycoff
     equal-contrib: true
     affiliation: 2
