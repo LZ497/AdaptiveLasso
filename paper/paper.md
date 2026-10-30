@@ -87,17 +87,6 @@ The following results illustrate that workflow with interaction features. RMSE m
 
 The Gaussian rows have similar scores, while the count-model rows demonstrate the practical value of changing the observation model within the same software. This single dataset does not establish a general advantage of adaptive penalties or separate their effect from likelihood choice. The workflow is implemented in `experiments/hourly_compare.py`, with shared preprocessing and evaluation in `experiments/hourly_common.py`; methodological comparisons are discussed by @Wycoff2024.
 
-# AI Usage Disclosure
-
-OpenAI Codex assisted with manuscript drafting and revision, inspection of the repository's source code and development history, and checking software-comparison claims against official documentation.
-
-<!-- Disclosure remains incomplete. Before submission, the authors must add model/version
-information, disclose any additional AI use in software or documentation development,
-and describe the human review, editing, and validation actually performed. Do not assert
-that these steps are complete until confirmed by the authors.
-Other submission TODOs: complete author metadata, add automated correctness tests and CI,
-and provide data acquisition instructions, exact tuning flags, and archived results for
-the retained hourly benchmark table. -->
 
 # Acknowledgements
 
